@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "adaa",
+  "version": "0.0.0",
+  "description": "Run a company's IT with the adaa CLI: people, devices, findings, tasks, mail, domains, servers and backups."
+}
