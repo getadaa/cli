@@ -1,0 +1,11 @@
+{
+  "name": "adaa",
+  "description": "Run a company's IT with the adaa CLI: people, devices, findings, tasks, mail, domains, servers and backups.",
+  "version": "0.0.0",
+  "author": {
+    "name": "Adaa",
+    "url": "https://adaa.no"
+  },
+  "homepage": "https://github.com/getadaa/cli",
+  "repository": "https://github.com/getadaa/cli"
+}

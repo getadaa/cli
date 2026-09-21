@@ -1,0 +1,131 @@
+version: 2
+project_name: adaa
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+    # Completions are generated from the real command tree and shipped in every
+    # package, so tab completion works the moment adaa is installed.
+    - mkdir -p completions
+    - sh -c 'go run ./cmd/adaa completion bash > completions/adaa.bash'
+    - sh -c 'go run ./cmd/adaa completion zsh > completions/_adaa'
+    - sh -c 'go run ./cmd/adaa completion fish > completions/adaa.fish'
+    - sh -c 'go run ./cmd/adaa completion powershell > completions/adaa.ps1'
+
+builds:
+  - id: adaa
+    main: ./cmd/adaa
+    binary: adaa
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/getadaa/cli/internal/build.Version={{.Version}}
+      - -X github.com/getadaa/cli/internal/build.Commit={{.Commit}}
+      - -X github.com/getadaa/cli/internal/build.Date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    ids: [adaa]
+    # `adaa update` looks for exactly this name when it replaces itself.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - src: completions/*
+        dst: completions
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+homebrew_casks:
+  - name: adaa
+    binaries: [adaa]
+    repository:
+      owner: getadaa
+      name: homebrew-tap
+      # GoReleaser requires this to be exactly {{ .Env.VAR }}.
+      token: "{{ .Env.CHANNELS_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://adaa.no
+    description: Run your company's IT from the terminal
+    completions:
+      bash: completions/adaa.bash
+      zsh: completions/_adaa
+      fish: completions/adaa.fish
+    hooks:
+      post:
+        # Downloaded binaries are quarantined by Gatekeeper, which makes the
+        # first run fail with an unhelpful dialog.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/adaa"]
+          end
+
+scoops:
+  - name: adaa
+    repository:
+      owner: getadaa
+      name: scoop-bucket
+      token: "{{ .Env.CHANNELS_GITHUB_TOKEN }}"
+    homepage: https://adaa.no
+    description: Run your company's IT from the terminal
+
+nfpms:
+  - id: packages
+    package_name: adaa
+    ids: [adaa]
+    formats: [deb, rpm, apk]
+    vendor: Adaa
+    homepage: https://adaa.no
+    maintainer: Adaa
+    description: Run your company's IT from the terminal
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    contents:
+      - src: completions/adaa.bash
+        dst: /usr/share/bash-completion/completions/adaa
+      - src: completions/_adaa
+        dst: /usr/share/zsh/vendor-completions/_adaa
+      - src: completions/adaa.fish
+        dst: /usr/share/fish/vendor_completions.d/adaa.fish
+
+release:
+  github:
+    owner: getadaa
+    name: cli
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    brew install getadaa/tap/adaa                                                   # macOS, Linux
+    scoop bucket add getadaa https://github.com/getadaa/scoop-bucket; scoop install adaa  # Windows
+    ```
+
+    Linux packages (`.deb`, `.rpm`, `.apk`) are attached below. Then:
+
+    ```sh
+    adaa login
+    adaa doctor --fix
+    ```

@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Only tag runs can enter this environment; it holds the release App key.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: getadaa
+          repositories: homebrew-tap,scoop-bucket
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNELS_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  # The skill is published to the marketplace after the binaries, so a skill
+  # never describes commands that nobody can install yet.
+  plugin:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: getadaa
+          repositories: plugins
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: getadaa/plugins
+          token: ${{ steps.app-token.outputs.token }}
+          path: marketplace
+      - name: Open and auto-merge a pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          scripts/publish-plugin.sh "${VERSION#v}" marketplace
+          cd marketplace
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "The marketplace already has this version."
+            exit 0
+          fi
+          branch="adaa-$VERSION"
+          git config user.name "getadaa-release[bot]"
+          git config user.email "getadaa-release[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "adaa $VERSION"
+          git push --force origin "$branch"
+          gh pr create --title "adaa $VERSION" --body "Published from https://github.com/getadaa/cli/releases/tag/$VERSION" --head "$branch" --base main || true
+          # --auto fails when nothing is left to wait for; then merge directly.
+          gh pr merge "$branch" --squash --auto || gh pr merge "$branch" --squash
