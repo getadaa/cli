@@ -73,11 +73,15 @@ func newPeopleListCmd(a *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The role is not on a person any more, so it is read from the
+			// members list and joined here. A caller without permission to read
+			// that still gets the people, with the column blank.
+			roles := a.rolesByPerson(ctx)
 			return a.PrintListing(l, "No people yet. Add someone with `adaa people add`.",
 				[]string{"ID", "Name", "Email", "Title", "Status", "Role"},
 				func(p obj.Obj) []string {
 					return []string{a.dim(p.Str("id")), p.Str("full_name"), p.Str("email"), p.Str("job_title"),
-						a.status(p.Str("employment_status")), peopleRoleLabel(p.Str("portal_role"))}
+						a.status(p.Str("employment_status")), peopleRoleLabel(roles[p.Str("id")])}
 				})
 		},
 	}
@@ -85,6 +89,27 @@ func newPeopleListCmd(a *App) *cobra.Command {
 	cmd.Flags().StringVar(&status, "status", "", "Only people with this employment status: planned, active or departed")
 	enumFlag(cmd, "status", employmentStatuses...)
 	return cmd
+}
+
+// rolesByPerson maps an employee record to the role its member holds, for the
+// views that show both. Best effort: it is a courtesy on a people listing, and an
+// employee who cannot read the members list still gets the people.
+func (a *App) rolesByPerson(ctx context.Context) map[string]string {
+	path, err := a.OrgPath(ctx, "/members")
+	if err != nil {
+		return nil
+	}
+	items, err := a.ListItems(ctx, path, nil)
+	if err != nil {
+		return nil
+	}
+	roles := make(map[string]string, len(items.Items))
+	for _, m := range items.Items {
+		if pid := m.Str("membership.person_id"); pid != "" && m.Str("membership.revoked_at") == "" {
+			roles[pid] = m.Str("membership.role")
+		}
+	}
+	return roles
 }
 
 func peopleRoleLabel(r string) string {
@@ -121,22 +146,24 @@ func newPeopleViewCmd(a *App) *cobra.Command {
 			// permission to read them still gets the person.
 			ents, _ := a.ListItems(ctx, "/people/"+id+"/entitlements", nil)
 			asg, _, _ := a.Get(ctx, "/people/"+id+"/assignments", nil)
-			a.renderPerson(p, ents, asg)
+			member, _ := a.membershipOfPerson(ctx, id)
+			a.renderPerson(p, ents, asg, member)
 			return nil
 		},
 	}
 }
 
-func (a *App) renderPerson(p obj.Obj, ents *Listing, asg obj.Obj) {
+func (a *App) renderPerson(p obj.Obj, ents *Listing, asg obj.Obj, member obj.Obj) {
 	s := a.IO.S()
 	d := a.IO.NewDetail(p.Str("full_name"), p.Str("id"))
 	d.Field("Email", p.Str("email"))
 	d.Field("Title", p.Str("job_title"))
 	d.Field("Phone", p.Str("phone"))
 	d.Field("Status", a.status(p.Str("employment_status")))
-	role := peopleRoleLabel(p.Str("portal_role"))
-	if role == "" {
-		role = s.Dim("cannot sign in")
+	role := s.Dim("cannot sign in")
+	if member != nil {
+		role = peopleRoleLabel(member.Str("membership.role")) +
+			" " + a.dim(member.Str("membership.id"))
 	}
 	d.Field("Portal", role)
 	d.Field("Started", p.Str("started_on"))
@@ -329,9 +356,6 @@ A start date in the future prepares everything without provisioning early.`,
 			case startsOn != "" && peopleIsFuture(startsOn):
 				body["employment_status"] = "planned"
 			}
-			if role != "" && role != "none" {
-				body["portal_role"] = role
-			}
 			if len(ents) > 0 {
 				body["entitlements"] = ents
 			}
@@ -345,6 +369,18 @@ A start date in the future prepares everything without provisioning early.`,
 			if err != nil || dryRun {
 				return err
 			}
+			// A role is a membership rather than a field, so onboarding somebody
+			// who can sign in is two calls. The person exists either way: a
+			// failure here leaves an employee who cannot sign in, which is worth
+			// saying rather than rolling the onboarding back.
+			if role != "" && role != "none" {
+				if err := a.setPersonRole(ctx, p, role); err != nil {
+					a.IO.Warnf("Onboarded %s, but could not give them the %s role: %v",
+						p.Str("full_name"), peopleRoleLabel(role), err)
+					a.IO.Hint("adaa members grant %s --role %s", p.Str("email"), role)
+				}
+			}
+
 			if a.JSON {
 				return a.PrintJSON(resp.Body)
 			}
@@ -464,26 +500,44 @@ func newPeopleEditCmd(a *App) *cobra.Command {
 			body.str(cmd, "phone", "phone", phone)
 			body.str(cmd, "starts-on", "started_on", startsOn)
 			body.str(cmd, "status", "employment_status", status)
-			if cmd.Flags().Changed("role") {
-				if role == "none" || role == "" {
-					body["portal_role"] = nil
-				} else {
-					body["portal_role"] = role
-				}
-			}
-			if len(body) == 0 {
+			roleChanged := cmd.Flags().Changed("role")
+			if len(body) == 0 && !roleChanged {
 				return usagef("nothing to change; pass at least one of --name, --email, --title, --phone, --starts-on, --role, --status")
 			}
 			id, err := a.Resolve(ctx, kindPerson, arg(args))
 			if err != nil {
 				return err
 			}
-			resp, p, err := a.Send(ctx, http.MethodPatch, "/people/"+id, map[string]any(body))
-			if err != nil {
-				return err
+			var (
+				p   obj.Obj
+				raw []byte
+			)
+			if len(body) > 0 {
+				resp, patched, err := a.Send(ctx, http.MethodPatch, "/people/"+id, map[string]any(body))
+				if err != nil {
+					return err
+				}
+				p, raw = patched, resp.Body
+			} else {
+				// Only the role is changing, and that needs the address to grant
+				// against. Read rather than guess.
+				read, body, err := a.Get(ctx, "/people/"+id, nil)
+				if err != nil {
+					return err
+				}
+				p, raw = read, body
+			}
+			// The role is a membership rather than a field on a person, so it is
+			// a second call. `adaa members` is where this lives properly; the
+			// flag stays because changing somebody's access while editing them is
+			// what people mean.
+			if roleChanged {
+				if err := a.setPersonRole(ctx, p, role); err != nil {
+					return err
+				}
 			}
 			if a.JSON {
-				return a.PrintJSON(resp.Body)
+				return a.PrintJSON(raw)
 			}
 			a.IO.Successf("Updated %s.", p.Str("full_name"))
 			return nil

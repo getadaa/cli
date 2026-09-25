@@ -24,6 +24,17 @@ type Kind struct {
 	Match []string
 	// Label is how a record appears in a picker and in completion.
 	Label func(obj.Obj) string
+	// ID is where the identifier lives, for a record that arrives wrapped in
+	// something else. Empty means "id".
+	ID string
+}
+
+// idOf reads the identifier out of one record.
+func (k Kind) idOf(o obj.Obj) string {
+	if k.ID != "" {
+		return o.Str(k.ID)
+	}
+	return o.Str("id")
 }
 
 func (k Kind) listPath(ctx context.Context, a *App) (string, error) {
@@ -77,6 +88,19 @@ var (
 	kindResource = Kind{Name: "resource", Plural: "resources", Prefix: "res_", List: "{org}/resources",
 		Match: []string{"display_name", "external_id"},
 		Label: func(o obj.Obj) string { return join(" · ", o.Str("display_name"), o.Str("kind")) }}
+	// A membership is who may act on the company, which is a different list
+	// from who works there: most employees have no membership, and somebody
+	// with a membership need not be an employee.
+	kindMembership = Kind{Name: "member", Plural: "members", Prefix: "mem_", List: "{org}/members",
+		ID:    "membership.id",
+		Match: []string{"identity.email", "identity.full_name"},
+		Label: func(o obj.Obj) string {
+			label := o.Str("identity.full_name") + " <" + o.Str("identity.email") + ">"
+			if o.Str("membership.revoked_at") != "" {
+				return label + " (revoked)"
+			}
+			return label + " · " + peopleRoleLabel(o.Str("membership.role"))
+		}}
 	kindToken = Kind{Name: "token", Plural: "tokens", Prefix: "tok_", List: "/tokens",
 		Match: []string{"name", "prefix"},
 		Label: func(o obj.Obj) string { return o.Str("name") }}
@@ -147,14 +171,14 @@ func (a *App) Resolve(ctx context.Context, k Kind, input string) (string, error)
 	case 0:
 		return "", &notFoundError{kind: k, input: input}
 	case 1:
-		return candidates[0].Str("id"), nil
+		return k.idOf(candidates[0]), nil
 	}
 	if a.IO.Interactive() {
 		return a.pick(k, candidates, fmt.Sprintf("Several %s match %q. Which one?", pluralOf(k), input))
 	}
 	var lines []string
 	for _, c := range candidates[:min(len(candidates), 10)] {
-		lines = append(lines, "  "+c.Str("id")+"  "+k.Label(c))
+		lines = append(lines, "  "+k.idOf(c)+"  "+k.Label(c))
 	}
 	return "", usagef("%q matches %d %s; use the id:\n%s", input, len(candidates), pluralOf(k), strings.Join(lines, "\n"))
 }
@@ -176,7 +200,7 @@ func (a *App) kindItems(ctx context.Context, k Kind) ([]obj.Obj, error) {
 func (a *App) pick(k Kind, items []obj.Obj, title string) (string, error) {
 	opts := make([]ui.Option, len(items))
 	for n, it := range items {
-		opts[n] = ui.Option{Label: k.Label(it), Value: it.Str("id")}
+		opts[n] = ui.Option{Label: k.Label(it), Value: k.idOf(it)}
 	}
 	return a.IO.Select(title, "the "+k.Name+" as an argument", opts)
 }
@@ -214,7 +238,7 @@ func (a *App) complete(k Kind) cobra.CompletionFunc {
 		}
 		var out []cobra.Completion
 		for _, it := range l.Items {
-			out = append(out, cobra.CompletionWithDesc(it.Str("id"), k.Label(it)))
+			out = append(out, cobra.CompletionWithDesc(k.idOf(it), k.Label(it)))
 		}
 		return out, cobra.ShellCompDirectiveNoFileComp
 	}

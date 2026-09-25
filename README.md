@@ -38,6 +38,8 @@ adaa report "The printer jams"       # tell adaa something is wrong
 adaa people add                      # onboard someone, with a cost preview
 adaa people offboard kari@firma.no
 adaa tasks list --awaiting-approval
+adaa members list                    # who may sign in, and as what
+adaa switch bjerk                    # act on another company you work for
 adaa devices register                # record this computer
 adaa devices discover                # find devices on your network adaa does not know
 adaa domains check firma.no          # verify DNS from this computer
@@ -49,6 +51,11 @@ Every command has `--help` with examples. Some conventions:
 
 - Records can be named the way you would say them: an email, a hostname, a
   domain. Leave the argument out and you get a picker.
+- **Who works here and who may sign in are two lists.** `adaa people` is the
+  estate — an employee with a mailbox and a laptop — and most of a company has
+  no way into the portal. `adaa members` is access: a role held *in* a company,
+  so if you work for two of them you hold one at each. `adaa switch` moves
+  between them, without signing in again.
 - Changes that cost money or remove something show a preview and ask first.
   `--dry-run` shows the preview only; `--yes` skips the question.
 - `--json` prints exactly what the API returned. Tables become tab-separated

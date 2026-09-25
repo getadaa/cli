@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/getadaa/cli/internal/obj"
 	"github.com/spf13/cobra"
@@ -15,9 +17,11 @@ func newTokensCmd(a *App) *cobra.Command {
 		Use:     "tokens",
 		Aliases: []string{"token"},
 		Short:   "Manage API tokens for integrations and automation",
-		Long: `API tokens let an integration or a script act as a person, with exactly that
-person's role and never more. Set one as ADAA_TOKEN, or store it with
-'adaa login --with-token'.`,
+		Long: `API tokens let an integration or a script act as a member of one organization,
+with exactly that member's role and never more. Because a token belongs to a
+membership, it can never reach another organization -- which is also why there is
+nothing to switch: issue one where you need it. Set one as ADAA_TOKEN, or store
+it with 'adaa login --with-token'.`,
 		GroupID: groupSetup,
 	}
 	cmd.AddCommand(newTokensListCmd(a), newTokensCreateCmd(a), newTokensRevokeCmd(a))
@@ -75,11 +79,11 @@ only a hash is stored, so a lost token is replaced rather than recovered.`,
 			if days < 0 {
 				return usagef("--expires-in-days must be positive")
 			}
-			pid, err := a.Resolve(ctx, kindPerson, forPerson)
+			mid, err := a.resolveMembership(ctx, forPerson)
 			if err != nil {
 				return err
 			}
-			body := map[string]any{"person_id": pid, "name": name}
+			body := map[string]any{"membership_id": mid, "name": name}
 			if days > 0 {
 				body["expires_in_days"] = days
 			}
@@ -98,10 +102,26 @@ only a hash is stored, so a lost token is replaced rather than recovered.`,
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "What the token is for, e.g. \"HR system\"")
-	cmd.Flags().StringVar(&forPerson, "for", "me", "Whose role the token carries (email, name or id)")
+	cmd.Flags().StringVar(&forPerson, "for", "me", "Whose role the token carries (email, name or membership id)")
 	cmd.Flags().IntVar(&days, "expires-in-days", 0, "Expire after this many days (default: never)")
-	_ = cmd.RegisterFlagCompletionFunc("for", a.complete(kindPerson))
+	_ = cmd.RegisterFlagCompletionFunc("for", a.complete(kindMembership))
 	return cmd
+}
+
+// resolveMembership turns what somebody typed into a membership id.
+//
+// "me" is the membership the credential in hand already resolves to, which is
+// the one case that needs no lookup -- and the one that has to keep working for
+// a member who is not an employee, since there is no person record to find.
+func (a *App) resolveMembership(ctx context.Context, input string) (string, error) {
+	if strings.TrimSpace(input) == "" || strings.EqualFold(strings.TrimSpace(input), "me") {
+		me, err := a.Identity(ctx)
+		if err != nil {
+			return "", err
+		}
+		return me.Str("membership.id"), nil
+	}
+	return a.Resolve(ctx, kindMembership, input)
 }
 
 func newTokensRevokeCmd(a *App) *cobra.Command {

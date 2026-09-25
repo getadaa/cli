@@ -23,8 +23,10 @@ func TestMain(m *testing.M) {
 }
 
 const (
-	testOrg    = "org_01JATX3M4K7Q2YV8N0RCBEZ5HS"
-	testPerson = "per_01JATX3M4K7Q2YV8N0RCBEZ5HS"
+	testOrg        = "org_01JATX3M4K7Q2YV8N0RCBEZ5HS"
+	testPerson     = "per_01JATX3M4K7Q2YV8N0RCBEZ5HS"
+	testIdentity   = "idn_01JATX3M4K7Q2YV8N0RCBEZ5HS"
+	testMembership = "mem_01JATX3M4K7Q2YV8N0RCBEZ5HS"
 )
 
 // fakeAPI is an in-process adaa API. Register handlers with on(); every
@@ -33,6 +35,11 @@ type fakeAPI struct {
 	t   *testing.T
 	srv *httptest.Server
 	mux *http.ServeMux
+
+	// identity is what GET /me answers, exposed so a test can give the caller a
+	// second membership. Read when the request arrives rather than when the fake
+	// is built, so a test may change it after construction.
+	identity map[string]any
 
 	mu    sync.Mutex
 	calls []call
@@ -60,17 +67,30 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		f.mux.ServeHTTP(w, r)
 	}))
 	t.Cleanup(f.srv.Close)
-	identity := map[string]any{
-		"person":       map[string]any{"id": testPerson, "organization_id": testOrg, "full_name": "Kari Nordmann", "email": "kari@firma.no", "portal_role": "org_admin", "employment_status": "active"},
+	f.identity = map[string]any{
+		"identity": map[string]any{
+			"id": testIdentity, "full_name": "Kari Nordmann", "email": "kari@firma.no",
+		},
+		"membership": map[string]any{
+			"id": testMembership, "organization_id": testOrg, "role": "org_admin", "person_id": testPerson,
+		},
+		"person": map[string]any{
+			"id": testPerson, "organization_id": testOrg, "full_name": "Kari Nordmann",
+			"email": "kari@firma.no", "employment_status": "active",
+		},
 		"organization": map[string]any{"id": testOrg, "name": "Firma AS", "status": "active"},
-		"permissions":  []string{"person.read", "person.write"},
+		"memberships": []any{map[string]any{
+			"membership_id": testMembership, "organization_id": testOrg,
+			"organization_name": "Firma AS", "organization_slug": "firma", "role": "org_admin",
+		}},
+		"permissions": []string{"person.read", "person.write"},
 	}
 	f.onFunc("GET /me", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
 			writeJSON(w, 401, problem(401, "unauthorized", "Not signed in"))
 			return
 		}
-		writeJSON(w, 200, identity)
+		writeJSON(w, 200, f.identity)
 	})
 	return f
 }

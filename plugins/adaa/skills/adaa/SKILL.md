@@ -1,6 +1,6 @@
 ---
 name: adaa
-description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
+description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), who may sign in and as what (members), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
 allowed-tools: Bash(adaa *), Bash(adaa)
 ---
 
@@ -63,6 +63,11 @@ names the flag it needed. So:
 - **Sign-in is two steps.** `adaa login --email <address>` sends a link; the
   user pastes it back and you run `adaa login --code '<link>'`. Or the user
   sets `ADAA_TOKEN` (from `adaa tokens create`).
+- **One credential, one organization.** Somebody working for several customers
+  — a consultant, a bookkeeper — signs in once and moves between them with
+  `adaa switch`. `adaa whoami` lists the others under "Also yours". Check which
+  organization you are in before any change, because nothing in a command names
+  it: a token cannot switch at all, and belongs wherever it was issued.
 
 ## Reading output
 
@@ -84,7 +89,8 @@ Exit codes: `0` ok · `1` error · `2` usage, or input needed without a terminal
 Every id says what it is: `per_` person, `dev_` device, `fnd_` finding,
 `tsk_` task, `req_` request, `dom_` domain, `mbx_` mailbox, `srv_` server,
 `bkp_` backup, `crd_` credential, `lic_` license, `sub_` subscription,
-`wsp_` workspace. `adaa show <id>` displays any of them.
+`wsp_` workspace, `mem_` membership, `idn_` identity. `adaa show <id>` displays
+any of them.
 
 Commands also accept what a person would say: an email or name for people
 (`me` for the current user), a hostname or serial number for devices, a
@@ -97,6 +103,14 @@ adaa compares what the company **should** have (people and their
 entitlements) with what **exists** (resources, measured by signals). The
 difference is a **finding**. Closing it is a **task**. A **request** is a
 conversation with adaa's people.
+
+**Who works here and who may sign in are two lists.** `adaa people` is the
+estate: an employee with a mailbox and a laptop, and most of a company has no
+way into the portal at all. `adaa members` is access: a role held *in* an
+organization, so one person working for two customers holds one at each. Adding
+somebody to the estate does not let them in. `adaa people add --role` does both,
+and `adaa people edit --role` changes their access; either way the role lives on
+the membership, which is what `adaa members` shows.
 
 - Onboarding is `adaa people add` with the services the person should have.
   adaa works out the mailbox, seats and accounts and raises the tasks.
@@ -126,6 +140,14 @@ adaa people offboard ola@firma.no --last-day 2026-12-31 --forward-mail-to kari@f
 adaa tasks list --awaiting-approval
 adaa requests new --kind question --title "..." --body "..."
 adaa requests reply req_… "Thanks, that works."
+
+adaa members list                             # who may sign in, and as what
+adaa members grant ola@firma.no --role org_member
+adaa members role ola@firma.no --role org_admin
+adaa members revoke ola@firma.no --yes        # their sessions and tokens stop working now
+
+adaa whoami                                   # who you are, where, and everywhere else
+adaa switch bjerk                             # act on another organization you belong to
 
 adaa devices list --unassigned
 adaa devices register --assign me             # records the computer adaa runs on
@@ -160,14 +182,19 @@ calls the API directly (`{org}` in the path is filled in), e.g.
    unexpectedly. Report what it could not fix.
 2. Use `--dry-run` before any change that costs money or removes something,
    and show the user the preview. Pass `--yes` only after they agree.
-3. Never approve tasks, restore backups, reveal credentials
+3. Never grant or change a role (`adaa members grant`, `adaa members role`)
+   unless the user asked for exactly that. Access is not a detail to tidy up:
+   an administrator can turn off everything else. Revoking is immediate —
+   every session and token of theirs stops working at once — so confirm who
+   before running it, and remember the last administrator cannot be removed.
+4. Never approve tasks, restore backups, reveal credentials
    (`adaa credentials reveal`), print a domain auth code (`adaa domains auth-code`)
    or reset passwords unless the user asked for exactly that. Reveals are
    logged against the user, and the API may refuse agents outright
    (`agents-may-not-reveal`): tell the user to do it themselves.
-4. Never put secrets in command lines. `adaa credentials add` and
+5. Never put secrets in command lines. `adaa credentials add` and
    `adaa credentials rotate` read them with `--secret-stdin`.
-5. Prefer `--json` when you need to read results, and ids over names once
+6. Prefer `--json` when you need to read results, and ids over names once
    you have them.
-6. When the API refuses something (exit 6), read `how_to_resolve` and relay
+7. When the API refuses something (exit 6), read `how_to_resolve` and relay
    it; do not retry the same call hoping for a different answer.

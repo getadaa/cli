@@ -362,7 +362,7 @@ func (a *App) checkLogin(ctx context.Context) []*check {
 	}
 	login.Status = checkOK
 	login.Summary = fmt.Sprintf("Logged in as %s <%s> at %s (%s)", me.Str("person.full_name"), me.Str("person.email"),
-		me.Str("organization.name"), strings.ReplaceAll(me.Str("person.portal_role"), "_", " "))
+		me.Str("organization.name"), strings.ReplaceAll(me.Str("membership.role"), "_", " "))
 	if src != auth.SourceEnv {
 		org := me.Str("organization.id")
 		if org != "" && (org != a.Cfg.OrganizationID || me.Str("organization.name") != a.Cfg.OrganizationName) {

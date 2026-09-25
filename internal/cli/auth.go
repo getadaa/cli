@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/mail"
@@ -22,6 +23,7 @@ func init() {
 	register(newLoginCmd)
 	register(newLogoutCmd)
 	register(newWhoamiCmd)
+	register(newSwitchCmd)
 }
 
 func newLoginCmd(a *App) *cobra.Command {
@@ -165,11 +167,14 @@ func (a *App) finishLogin(ctx context.Context, token, expiresAt string) error {
 	}
 	a.Cfg.OrganizationID = me.Str("organization.id")
 	if a.Cfg.OrganizationID == "" {
-		a.Cfg.OrganizationID = me.Str("person.organization_id")
+		// The membership is where a credential acts, and it is the authority on
+		// that: the organization block is a convenience the API fills in beside
+		// it and may omit if it cannot read the record.
+		a.Cfg.OrganizationID = me.Str("membership.organization_id")
 	}
 	a.Cfg.OrganizationName = me.Str("organization.name")
-	a.Cfg.Email = me.Str("person.email")
-	a.Cfg.Name = me.Str("person.full_name")
+	a.Cfg.Email = me.Str("identity.email")
+	a.Cfg.Name = me.Str("identity.full_name")
 	where, err := auth.Save(a.Cfg, token)
 	if err != nil {
 		return err
@@ -182,6 +187,10 @@ func (a *App) finishLogin(ctx context.Context, token, expiresAt string) error {
 		who += " (" + a.Cfg.OrganizationName + ")"
 	}
 	a.IO.Successf("Logged in as %s.", who)
+	if others := len(me.List("memberships")); others > 1 {
+		a.IO.Infof("%s", a.dim(fmt.Sprintf(
+			"You can also act on %d other organizations. `adaa switch` moves between them.", others-1)))
+	}
 	if where == auth.SourceFile {
 		a.IO.Warnf("No system keychain was available, so the session is in the config file.")
 	}
@@ -223,6 +232,106 @@ func newLogoutCmd(a *App) *cobra.Command {
 	}
 }
 
+// newSwitchCmd moves to another organization the same person may act on.
+//
+// It is an exchange rather than a sign-in: the session already proves who they
+// are, and what comes back is a credential for somewhere else. The one it
+// replaces locally keeps working server-side until the sign-in expires, which is
+// what lets two terminals sit on two customers.
+func newSwitchCmd(a *App) *cobra.Command {
+	return &cobra.Command{
+		Use:     "switch [organization]",
+		Short:   "Act on another organization you belong to",
+		GroupID: groupSetup,
+		Long: `Move to another organization you may act on, by handle, name or id.
+
+Nothing is re-authenticated: your session already proves who you are, so this
+exchanges it for one at the other organization. Somebody working for one customer
+has nothing to switch to, and is told so.
+
+An API token cannot switch: it belongs to one organization by construction, so
+issue one where you need it instead.`,
+		Example: "  adaa switch\n  adaa switch bjerk",
+		Args:    cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Whether the credential in hand can switch at all is the API's
+			// answer, not a guess from where it was stored: a session exported
+			// into ADAA_TOKEN is still a session, and the API refuses a real
+			// token with a message saying what to do instead.
+			ctx := cmd.Context()
+			me, err := a.Identity(ctx)
+			if err != nil {
+				return err
+			}
+			here := me.Str("membership.organization_id")
+
+			elsewhere := make([]obj.Obj, 0, 2)
+			for _, m := range me.List("memberships") {
+				if m.Str("organization_id") != here {
+					elsewhere = append(elsewhere, m)
+				}
+			}
+			if len(elsewhere) == 0 {
+				a.IO.Infof("You only belong to %s, so there is nowhere to switch to.",
+					orNone(me.Str("organization.name"), "this organization"))
+				return nil
+			}
+
+			target, err := a.pickOrganization(elsewhere, arg(args))
+			if err != nil {
+				return err
+			}
+
+			resp, session, err := a.Send(ctx, http.MethodPost, "/auth/session/switch",
+				map[string]any{"organization_id": target})
+			if err != nil {
+				return err
+			}
+			if a.JSON {
+				return a.PrintJSON(resp.Body)
+			}
+			return a.finishLogin(ctx, session.Str("token"), session.Str("expires_at"))
+		},
+	}
+}
+
+// pickOrganization matches what somebody typed against the organizations they
+// may act on, by handle first because that is the one chosen once and stable.
+func (a *App) pickOrganization(choices []obj.Obj, input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		opts := make([]ui.Option, len(choices))
+		for n, m := range choices {
+			opts[n] = ui.Option{
+				Label: join(" · ", m.Str("organization_name"), peopleRoleLabel(m.Str("role"))),
+				Value: m.Str("organization_id"),
+			}
+		}
+		return a.IO.Select("Which organization?", "the organization as an argument", opts)
+	}
+
+	var matches []obj.Obj
+	for _, m := range choices {
+		if strings.EqualFold(m.Str("organization_slug"), input) ||
+			strings.EqualFold(m.Str("organization_id"), input) ||
+			strings.EqualFold(m.Str("organization_name"), input) {
+			return m.Str("organization_id"), nil
+		}
+		if strings.Contains(strings.ToLower(m.Str("organization_name")), strings.ToLower(input)) {
+			matches = append(matches, m)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0].Str("organization_id"), nil
+	}
+	names := make([]string, 0, len(choices))
+	for _, m := range choices {
+		names = append(names, orNone(m.Str("organization_slug"), m.Str("organization_name")))
+	}
+	return "", usagef("no organization of yours matches %q; you may act on: %s",
+		input, strings.Join(names, ", "))
+}
+
 func newWhoamiCmd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:     "whoami",
@@ -240,12 +349,30 @@ func newWhoamiCmd(a *App) *cobra.Command {
 			}
 			return a.PrintObj(resp.Body, me, func(me obj.Obj) {
 				_, src := auth.Token(a.Cfg)
-				d := a.IO.NewDetail(me.Str("person.full_name"), me.Str("person.id"))
-				d.Field("Email", me.Str("person.email"))
-				d.Field("Role", strings.ReplaceAll(me.Str("person.portal_role"), "_", " "))
-				d.Field("Organization", join(" ", me.Str("organization.name"), a.dim(me.Str("organization.id"))))
+				d := a.IO.NewDetail(me.Str("identity.full_name"), me.Str("identity.id"))
+				d.Field("Email", me.Str("identity.email"))
+				d.Field("Role", strings.ReplaceAll(me.Str("membership.role"), "_", " "))
+				d.Field("Organization", join(" ", me.Str("organization.name"),
+					a.dim(me.Str("membership.organization_id"))))
+				// Empty for somebody who may act on this company without working
+				// here, which is a real state rather than a missing record.
+				if p := me.Str("person.id"); p != "" {
+					d.Field("Employee record", a.dim(p))
+				} else {
+					d.Field("Employee record", a.dim("none — you are not employed here"))
+				}
 				d.Field("API", a.Cfg.EffectiveAPIURL())
 				d.Field("Credential", string(src))
+				if others := me.List("memberships"); len(others) > 1 {
+					d.Section("Also yours")
+					for _, m := range others {
+						if m.Str("organization_id") == me.Str("membership.organization_id") {
+							continue
+						}
+						d.Line(join(" · ", m.Str("organization_name"),
+							peopleRoleLabel(m.Str("role")), a.dim(m.Str("organization_slug"))))
+					}
+				}
 				d.Section("Permissions")
 				d.Line(wrapWords(me.Strings("permissions"), a.IO.Width()))
 				d.Render()
