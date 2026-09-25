@@ -9,7 +9,7 @@ const testPerson2 = "per_01JATX3M4K7Q2YV8N0RCBEZ5HT"
 
 func personFixture(id, name, email, status string) map[string]any {
 	return map[string]any{"id": id, "organization_id": testOrg, "full_name": name, "email": email,
-		"employment_status": status, "portal_role": "org_member", "job_title": "Sales",
+		"employment_status": status, "job_title": "Sales",
 		"created_at": "2026-09-01T10:00:00Z", "updated_at": "2026-09-01T10:00:00Z"}
 }
 

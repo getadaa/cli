@@ -157,7 +157,7 @@ func (a *App) registerHolder(ctx context.Context, assign string) (string, error)
 		return "", err
 	}
 	choice, err := a.IO.Select("Who uses this computer?", "--assign", []ui.Option{
-		{Label: "Me (" + me.Str("person.full_name") + ")", Value: "me"},
+		{Label: "Me (" + me.Str("identity.full_name") + ")", Value: "me"},
 		{Label: "Someone else", Value: "other"},
 		{Label: "Nobody in particular (shared or spare)", Value: "none"},
 	})

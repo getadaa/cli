@@ -7,7 +7,7 @@ import (
 
 func TestTokensCreatePrintsSecretOnce(t *testing.T) {
 	f := newFakeAPI(t)
-	f.on("POST /tokens", 201, map[string]any{"id": "tok_01JATX3M4K7Q2YV8N0RCBEZ5HS", "person_id": testPerson,
+	f.on("POST /tokens", 201, map[string]any{"id": "tok_01JATX3M4K7Q2YV8N0RCBEZ5HS", "membership_id": testMembership,
 		"name": "HR system", "prefix": "adaa_12", "secret": "adaa_12345678secret", "created_at": "2026-09-21T10:00:00Z"})
 	r := f.run("tokens", "create", "--name", "HR system", "--expires-in-days", "30").mustSucceed(t)
 	if strings.TrimSpace(r.Stdout) != "adaa_12345678secret" {
@@ -17,7 +17,7 @@ func TestTokensCreatePrintsSecretOnce(t *testing.T) {
 		t.Errorf("stderr: %s", r.Stderr)
 	}
 	b := f.requests("POST", "/tokens")[0].Body
-	if b["person_id"] != testPerson || b["expires_in_days"].(float64) != 30 {
+	if b["membership_id"] != testMembership || b["expires_in_days"].(float64) != 30 {
 		t.Errorf("body: %+v", b)
 	}
 }
@@ -25,7 +25,7 @@ func TestTokensCreatePrintsSecretOnce(t *testing.T) {
 func TestTokensListAndRevoke(t *testing.T) {
 	f := newFakeAPI(t)
 	id := "tok_01JATX3M4K7Q2YV8N0RCBEZ5HS"
-	f.on("GET /tokens", 200, page(map[string]any{"id": id, "name": "HR system", "prefix": "adaa_12", "person_id": testPerson, "created_at": "2026-09-21T10:00:00Z"}))
+	f.on("GET /tokens", 200, page(map[string]any{"id": id, "name": "HR system", "prefix": "adaa_12", "membership_id": testMembership, "created_at": "2026-09-21T10:00:00Z"}))
 	f.on("DELETE /tokens/"+id, 204, nil)
 	r := f.run("tokens", "list").mustSucceed(t)
 	if !strings.Contains(r.Stdout, "HR system") {

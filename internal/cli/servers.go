@@ -610,5 +610,5 @@ func (a *App) checkServerAccess(ctx context.Context, serverID string) error {
 		}
 	}
 	return fmt.Errorf("you have not been granted access to this server; an admin can run `adaa servers access grant %s %s`",
-		serverID, me.Str("person.email"))
+		serverID, me.Str("identity.email"))
 }
