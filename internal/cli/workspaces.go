@@ -2,17 +2,11 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"html"
-	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getadaa/cli/internal/obj"
 	"github.com/getadaa/cli/internal/ui"
@@ -25,8 +19,6 @@ var (
 	workspaceVendors      = []string{"microsoft_365", "google_workspace"}
 	workspaceGroupKinds   = []string{"distribution_list", "shared_mailbox", "security_group", "team"}
 	workspaceAcctStatuses = []string{"provisioning", "active", "suspended", "deleted"}
-	// wsPollInterval is how often a pending consent is checked. Tests shorten it.
-	wsPollInterval = 3 * time.Second
 )
 
 func newWorkspacesCmd(a *App) *cobra.Command {
@@ -44,7 +36,7 @@ company: who has an account, who is in which group, and how secure it is.`,
 	groups := &cobra.Command{Use: "groups", Aliases: []string{"group"}, Short: "Distribution lists, shared mailboxes, security groups and teams"}
 	groups.AddCommand(newWSGroupsListCmd(a), newWSGroupsAddCmd(a), newWSGroupsMemberCmd(a, true), newWSGroupsMemberCmd(a, false))
 	cmd.AddCommand(newWSListCmd(a), newWSViewCmd(a), newWSAddCmd(a), newWSEditCmd(a), newWSConnectCmd(a),
-		newWSAuthorizationCmd(a), newWSReauthorizeCmd(a), newWSSecurityCmd(a), newWSDrivesCmd(a), accounts, groups)
+		newWSReauthorizeCmd(a), newWSSecurityCmd(a), newWSDrivesCmd(a), accounts, groups)
 	return cmd
 }
 
@@ -230,24 +222,9 @@ func newWSEditCmd(a *App) *cobra.Command {
 
 // ---- Consent -------------------------------------------------------------
 
-type wsConsentOpts struct {
-	redirectURI string
-	noBrowser   bool
-	noWait      bool
-	timeout     time.Duration
-}
-
-func addWSConsentFlags(cmd *cobra.Command, o *wsConsentOpts) {
-	f := cmd.Flags()
-	f.StringVar(&o.redirectURI, "redirect-uri", "", "Where the vendor sends the administrator back (default: a listener on this computer)")
-	f.BoolVar(&o.noBrowser, "no-browser", false, "Print the consent link instead of opening it")
-	f.BoolVar(&o.noWait, "no-wait", false, "Print the consent link and return without waiting")
-	f.DurationVar(&o.timeout, "timeout", 20*time.Minute, "How long to wait for consent")
-}
-
 func newWSConnectCmd(a *App) *cobra.Command {
-	var vendor, domain string
-	var o wsConsentOpts
+	var vendor, domain, name string
+	var o consentOpts
 	cmd := &cobra.Command{
 		Use:   "connect",
 		Short: "Give adaa access to a Microsoft 365 or Google Workspace",
@@ -255,293 +232,75 @@ func newWSConnectCmd(a *App) *cobra.Command {
 Microsoft or Google, sees exactly what is asked for, and grants or refuses it
 there. adaa never sees their password.
 
-The consent link opens in the browser. By default this command listens on
-this computer for the vendor's redirect and finishes the connection itself;
-with --redirect-uri it waits for the authorization to be granted elsewhere.`,
+This is 'adaa connections add' for a workspace supplier. The consent link opens
+in the browser. By default this command listens on this computer for the
+vendor's redirect and finishes the connection itself; with --redirect-uri it
+waits for consent to be granted elsewhere.`,
 		Example: `  adaa workspaces connect --vendor microsoft_365 --domain firma.no
-  adaa workspaces connect --vendor google_workspace --no-browser`,
+  adaa workspaces connect --vendor google_workspace --domain firma.no --no-browser`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := oneOf("vendor", vendor, workspaceVendors...); err != nil {
-				return err
-			}
-			if vendor == "" {
-				v, err := a.IO.Select("Which vendor?", "--vendor", wsVendorOptions())
-				if err != nil {
-					return err
-				}
-				vendor = v
-			}
-			path, err := a.OrgPath(cmd.Context(), "/workspaces/connect")
+			ctx := cmd.Context()
+			p, err := a.pickProvider(ctx, vendor, "workspace")
 			if err != nil {
 				return err
 			}
-			return a.wsConsent(cmd.Context(), o, func(redirect string) (obj.Obj, []byte, error) {
-				body := map[string]any{"vendor": vendor, "redirect_uri": redirect}
-				if domain != "" {
-					body["primary_domain"] = domain
-				}
-				resp, auth, err := a.Send(cmd.Context(), http.MethodPost, path, body)
-				if err != nil {
-					return nil, nil, err
-				}
-				return auth, resp.Body, nil
-			})
+			return a.connect(ctx, p, connectInput{name: name, account: domain, method: "oauth"}, o)
 		},
 	}
 	cmd.Flags().StringVar(&vendor, "vendor", "", "microsoft_365 or google_workspace")
-	cmd.Flags().StringVar(&domain, "domain", "", "The domain you expect the workspace to have (checked against what consent grants)")
+	cmd.Flags().StringVar(&domain, "domain", "", "The workspace's primary domain")
+	cmd.Flags().StringVar(&name, "name", "", "What to call the connection (default: the domain)")
 	enumFlag(cmd, "vendor", workspaceVendors...)
-	addWSConsentFlags(cmd, &o)
+	addConsentFlags(cmd, &o)
 	return cmd
 }
 
 func newWSReauthorizeCmd(a *App) *cobra.Command {
-	var o wsConsentOpts
+	var o consentOpts
 	cmd := &cobra.Command{
 		Use:   "reauthorize [workspace]",
 		Short: "Ask for consent again after access lapsed or was revoked",
 		Long: `Issue a new consent link for a workspace whose status is unauthorized. Consent is
 withdrawn at Microsoft or Google, not here, so the company can always cut adaa
-off without asking.`,
+off without asking. This renews the connection the workspace was made from.`,
 		Example:           `  adaa workspaces reauthorize firma.no`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: a.complete(kindWorkspace),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := a.Resolve(cmd.Context(), kindWorkspace, arg(args))
+			ctx := cmd.Context()
+			id, err := a.Resolve(ctx, kindWorkspace, arg(args))
 			if err != nil {
 				return err
 			}
-			return a.wsConsent(cmd.Context(), o, func(redirect string) (obj.Obj, []byte, error) {
-				resp, auth, err := a.Send(cmd.Context(), http.MethodPost, "/workspaces/"+id+"/reauthorize", map[string]any{"redirect_uri": redirect})
-				if err != nil {
-					return nil, nil, err
-				}
-				return auth, resp.Body, nil
-			})
+			conn, err := a.workspaceConnection(ctx, id)
+			if err != nil {
+				return err
+			}
+			return a.renew(ctx, conn, o)
 		},
 	}
-	addWSConsentFlags(cmd, &o)
+	addConsentFlags(cmd, &o)
 	return cmd
 }
 
-type wsCallback struct {
-	code, state, err string
-}
-
-// wsConsent runs the consent flow: start it, show what is being granted, send
-// the administrator to the vendor, then finish it from the redirect or wait
-// for it to be finished elsewhere.
-func (a *App) wsConsent(ctx context.Context, o wsConsentOpts, start func(redirect string) (obj.Obj, []byte, error)) error {
-	redirect := o.redirectURI
-	var callbacks chan wsCallback
-	if redirect == "" && !o.noWait {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return fmt.Errorf("could not listen for the vendor's redirect: %w (pass --redirect-uri)", err)
-		}
-		callbacks = make(chan wsCallback, 1)
-		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			q := r.URL.Query()
-			cb := wsCallback{code: q.Get("code"), state: q.Get("state"), err: join(": ", q.Get("error"), q.Get("error_description"))}
-			if cb.code == "" && cb.err == "" {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			msg := "Done. You can close this tab and go back to the terminal."
-			if cb.err != "" {
-				msg = "Consent was not granted: " + html.EscapeString(cb.err)
-			}
-			fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>adaa</title><p style=\"font:16px system-ui;margin:3em\">%s</p>", msg)
-			select {
-			case callbacks <- cb:
-			default:
-			}
-		})}
-		go func() { _ = srv.Serve(ln) }()
-		defer srv.Close()
-		redirect = fmt.Sprintf("http://localhost:%d/callback", ln.Addr().(*net.TCPAddr).Port)
-	}
-
-	auth, raw, err := start(redirect)
+// workspaceConnection finds the connection a workspace was made from. A
+// workspace does not name it; the connection names the workspace.
+func (a *App) workspaceConnection(ctx context.Context, workspaceID string) (string, error) {
+	path, err := a.OrgPath(ctx, "/provider-connections")
 	if err != nil {
-		return err
+		return "", err
 	}
-	if o.noWait {
-		if a.JSON {
-			return a.PrintJSON(raw)
-		}
-		fmt.Fprintln(a.IO.Out, auth.Str("consent_url"))
-		a.IO.Hint("adaa workspaces authorization %s", auth.Str("id"))
-		return nil
-	}
-
-	e := a.IO.E()
-	if grants := auth.List("grants"); len(grants) > 0 {
-		fmt.Fprintln(a.IO.Err, e.Bold("Consent covers:"))
-		for _, g := range grants {
-			mark := e.Dim("read ")
-			if g.Bool("write") {
-				mark = e.Yellow("write")
-			}
-			fmt.Fprintf(a.IO.Err, "  %s  %s\n", mark, g.Str("summary"))
-		}
-		fmt.Fprintln(a.IO.Err)
-	}
-	link := auth.Str("consent_url")
-	a.IO.Infof("A global administrator of the workspace must open this link:")
-	fmt.Fprintln(a.IO.Err, "  "+link)
-	if a.IO.Interactive() && !o.noBrowser {
-		if err := wsOpenBrowser(link); err == nil {
-			a.IO.Infof("%s", e.Dim("Opened it in your browser."))
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, o.timeout)
-	defer cancel()
-	id := auth.Str("id")
-	sp := a.IO.StartSpinner("Waiting for consent…")
-	defer sp.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			sp.Stop()
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				a.IO.Hint("adaa workspaces authorization %s", id)
-				return fmt.Errorf("consent was not given within %s", o.timeout)
-			}
-			return ctx.Err()
-		case cb := <-callbacks:
-			sp.Stop()
-			if cb.err != "" {
-				return fmt.Errorf("consent was not granted: %s", cb.err)
-			}
-			return a.wsComplete(ctx, id, cb.code, cb.state)
-		case <-time.After(wsPollInterval):
-			cur, curRaw, err := a.Get(ctx, "/workspace-authorizations/"+id, nil)
-			if err != nil {
-				return err
-			}
-			switch cur.Str("status") {
-			case "granted":
-				sp.Stop()
-				if a.JSON {
-					return a.PrintJSON(curRaw)
-				}
-				a.IO.Successf("Connected %s", orNone(cur.Str("workspace_id"), id))
-				if ws := cur.Str("workspace_id"); ws != "" {
-					a.IO.Hint("adaa workspaces security %s", ws)
-				}
-				return nil
-			case "denied":
-				sp.Stop()
-				return fmt.Errorf("consent was refused: %s", orNone(cur.Str("denied_reason"), "no reason given"))
-			case "expired":
-				sp.Stop()
-				return errors.New("the consent link expired; start again")
-			}
-		}
-	}
-}
-
-func (a *App) wsComplete(ctx context.Context, id, code, state string) error {
-	resp, w, err := a.Send(ctx, http.MethodPost, "/workspace-authorizations/"+id+"/complete",
-		map[string]any{"code": code, "state": state})
+	l, err := a.List(ctx, path, nil, ListOpts{All: true})
 	if err != nil {
-		return err
+		return "", err
 	}
-	if a.JSON {
-		return a.PrintJSON(resp.Body)
+	for _, c := range l.Items {
+		if c.Str("workspace_id") == workspaceID && c.Str("status") != "revoked" {
+			return c.Str("id"), nil
+		}
 	}
-	a.IO.Successf("Connected %s %s. Accounts, groups and security are being read now.",
-		orNone(w.Str("primary_domain"), "the workspace"), a.IO.E().Dim(w.Str("id")))
-	a.IO.Hint("adaa workspaces security %s", orNone(w.Str("primary_domain"), w.Str("id")))
-	return nil
-}
-
-func wsOpenBrowser(u string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", u)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
-	default:
-		cmd = exec.Command("xdg-open", u)
-	}
-	return cmd.Start()
-}
-
-func newWSAuthorizationCmd(a *App) *cobra.Command {
-	var callbackURL, code, state string
-	cmd := &cobra.Command{
-		Use:   "authorization <authorization>",
-		Short: "Show a consent request, or finish it with the vendor's redirect",
-		Long: `Show where a consent request got to. If the vendor redirected the administrator
-somewhere that did not finish the connection, paste the address they landed on
-with --callback-url (or pass --code and --state) to finish it here.`,
-		Example: `  adaa workspaces authorization wau_01JATX3M4K7Q2YV8N0RCBEZ5HS
-  adaa workspaces authorization wau_01J… --callback-url 'https://…/callback?code=…&state=…'`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			id := strings.TrimSpace(args[0])
-			if !strings.HasPrefix(id, "wau_") {
-				return usagef("pass an authorization id (wau_…)")
-			}
-			if callbackURL != "" {
-				u, err := url.Parse(callbackURL)
-				if err != nil {
-					return usagef("--callback-url is not a URL: %v", err)
-				}
-				q := u.Query()
-				if e := q.Get("error"); e != "" {
-					return fmt.Errorf("consent was not granted: %s", join(": ", e, q.Get("error_description")))
-				}
-				code, state = q.Get("code"), q.Get("state")
-				if code == "" || state == "" {
-					return usagef("--callback-url has no code and state in it")
-				}
-			}
-			if code != "" || state != "" {
-				if code == "" || state == "" {
-					return usagef("pass both --code and --state")
-				}
-				return a.wsComplete(cmd.Context(), id, code, state)
-			}
-			au, raw, err := a.Get(cmd.Context(), "/workspace-authorizations/"+id, nil)
-			if err != nil {
-				return err
-			}
-			return a.PrintObj(raw, au, func(au obj.Obj) {
-				v := a.IO.NewDetail(wsVendor(au.Str("vendor"))+" consent", au.Str("id"))
-				v.Field("Status", a.status(au.Str("status")))
-				v.Field("Workspace", au.Str("workspace_id"))
-				v.Field("Refused because", au.Str("denied_reason"))
-				v.Field("Expires", a.IO.When(au.Str("expires_at")))
-				if au.Str("status") == "pending" {
-					v.Field("Link", au.Str("consent_url"))
-				}
-				if gs := au.List("grants"); len(gs) > 0 {
-					v.Section("Covers")
-					for _, g := range gs {
-						mode := "read"
-						if g.Bool("write") {
-							mode = "write"
-						}
-						v.Line(mode + "  " + g.Str("summary"))
-					}
-				}
-				v.Render()
-			})
-		},
-	}
-	f := cmd.Flags()
-	f.StringVar(&callbackURL, "callback-url", "", "The address the vendor redirected to, with code and state")
-	f.StringVar(&code, "code", "", "The code from the vendor's redirect")
-	f.StringVar(&state, "state", "", "The state from the vendor's redirect")
-	cmd.MarkFlagsMutuallyExclusive("callback-url", "code")
-	return cmd
+	return "", fmt.Errorf("%s was not connected through consent; connect it with `adaa workspaces connect`", workspaceID)
 }
 
 // ---- Security and drives -------------------------------------------------

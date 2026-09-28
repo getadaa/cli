@@ -1,6 +1,6 @@
 ---
 name: adaa
-description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), who may sign in and as what (members), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
+description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), who may sign in and as what (members), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), supplier connections, servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
 allowed-tools: Bash(adaa *), Bash(adaa)
 ---
 
@@ -89,8 +89,8 @@ Exit codes: `0` ok · `1` error · `2` usage, or input needed without a terminal
 Every id says what it is: `per_` person, `dev_` device, `fnd_` finding,
 `tsk_` task, `req_` request, `dom_` domain, `mbx_` mailbox, `srv_` server,
 `bkp_` backup, `crd_` credential, `lic_` license, `sub_` subscription,
-`wsp_` workspace, `mem_` membership, `idn_` identity. `adaa show <id>` displays
-any of them.
+`wsp_` workspace, `pcn_` supplier connection, `mem_` membership, `idn_` identity,
+`att_` attachment. `adaa show <id>` displays any of them.
 
 Commands also accept what a person would say: an email or name for people
 (`me` for the current user), a hostname or serial number for devices, a
@@ -153,6 +153,9 @@ adaa devices list --unassigned
 adaa devices register --assign me             # records the computer adaa runs on
 adaa devices discover --json                  # hosts on the local network, known or new
 adaa licenses list --spare-seats
+adaa licenses edit lic_… --price 949.00
+adaa org services                             # what the company as a whole should have
+adaa org agreement                            # term, notice period and invoicing
 adaa cost
 adaa activity --since 24h
 ```
@@ -162,6 +165,30 @@ Products each have their own group: `adaa mail`, `adaa domains` (with `dns`,
 `adaa products` lists them. For anything without a command, `adaa api <path>`
 calls the API directly (`{org}` in the path is filled in), e.g.
 `adaa api '/organizations/{org}/people' --paginate`.
+
+## Supplier connections
+
+Accounts the company holds at a supplier are **connections**: a Microsoft 365 or
+Google Workspace tenant, or a DNS host such as Bunny. `adaa connections providers`
+lists who can be connected and whether it takes a key or consent.
+
+```sh
+adaa connections providers
+adaa connections list
+adaa connections add bunny --name "Bunny DNS" --secret-stdin   # key read from stdin
+adaa workspaces connect --vendor microsoft_365 --domain firma.no --no-wait
+adaa connections view pcn_… --callback-url '<address the admin landed on>'
+adaa domains edit firma.no --dns-connection "Bunny DNS"         # publish the zone there
+```
+
+Consent is given by an administrator at the supplier, never by you. Without a
+terminal, `--no-wait` prints the consent link; give it to the user, and finish
+with `adaa connections view <connection> --callback-url` if the redirect did not
+complete it. A workspace whose status is `unauthorized` has lost consent:
+`adaa workspaces reauthorize <workspace>` issues a new link. A key connection
+that stops working needs `adaa credentials rotate` instead.
+`adaa connections remove` is final and deletes the key; it is refused while a
+domain publishes through it.
 
 ## Checks you can run from this computer
 
@@ -192,8 +219,9 @@ calls the API directly (`{org}` in the path is filled in), e.g.
    or reset passwords unless the user asked for exactly that. Reveals are
    logged against the user, and the API may refuse agents outright
    (`agents-may-not-reveal`): tell the user to do it themselves.
-5. Never put secrets in command lines. `adaa credentials add` and
-   `adaa credentials rotate` read them with `--secret-stdin`.
+5. Never put secrets in command lines. `adaa credentials add`,
+   `adaa credentials rotate` and `adaa connections add` read them with
+   `--secret-stdin`.
 6. Prefer `--json` when you need to read results, and ids over names once
    you have them.
 7. When the API refuses something (exit 6), read `how_to_resolve` and relay

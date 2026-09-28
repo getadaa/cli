@@ -28,7 +28,8 @@ var viewers = map[string][]string{
 	"bkp_": {"backups", "view"},
 	"wsp_": {"workspaces", "view"},
 	"wac_": {"workspaces", "accounts", "view"},
-	"wau_": {"workspaces", "authorization"},
+	"pcn_": {"connections", "view"},
+	"mem_": {"members", "view"},
 }
 
 func newShowCmd(a *App) *cobra.Command {

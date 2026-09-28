@@ -43,6 +43,7 @@ adaa switch bjerk                    # act on another company you work for
 adaa devices register                # record this computer
 adaa devices discover                # find devices on your network adaa does not know
 adaa domains check firma.no          # verify DNS from this computer
+adaa connections add bunny           # connect an account you hold at a supplier
 adaa show fnd_01JATX…                # show any id
 adaa api /me                         # anything else the API offers
 ```

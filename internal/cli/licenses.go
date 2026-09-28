@@ -34,7 +34,7 @@ never sign in. Both are paid for; 'adaa licenses list' shows what that wastes
 every month.`,
 		GroupID: groupCore,
 	}
-	cmd.AddCommand(newLicensesListCmd(a), newLicensesViewCmd(a), newLicensesAddCmd(a), newLicensesSeatsCmd(a),
+	cmd.AddCommand(newLicensesListCmd(a), newLicensesViewCmd(a), newLicensesAddCmd(a), newLicensesEditCmd(a), newLicensesSeatsCmd(a),
 		newLicensesAssignmentsCmd(a), newLicensesAssignCmd(a), newLicensesReleaseCmd(a))
 	return cmd
 }
@@ -200,7 +200,7 @@ func (a *App) renderLicense(o obj.Obj, inactive []obj.Obj) {
 }
 
 func newLicensesAddCmd(a *App) *cobra.Command {
-	var vendor, plan, sku, workspace, term, price, commitmentEnds, renews, notes string
+	var vendor, plan, sku, workspace, term, price, commitmentEnds, renews, notes, externalID, subscription string
 	var seats int
 	var autoRenew bool
 	cmd := &cobra.Command{
@@ -249,6 +249,8 @@ Pools that adaa reads from a connected workspace appear on their own.`,
 			body := fields{"vendor": vendor, "plan_name": plan, "seats_purchased": seats, "term": term}
 			body.str(cmd, "sku", "sku", sku)
 			body.str(cmd, "workspace", "workspace", workspace)
+			body.str(cmd, "external-id", "external_id", externalID)
+			body.str(cmd, "subscription", "subscription_id", subscription)
 			body.str(cmd, "commitment-ends", "commitment_ends_on", commitmentEnds)
 			body.str(cmd, "renews-on", "renews_on", renews)
 			body.boolean(cmd, "auto-renew", "auto_renew", autoRenew)
@@ -280,6 +282,8 @@ Pools that adaa reads from a connected workspace appear on their own.`,
 	f.StringVar(&plan, "plan", "", "Plan name, e.g. \"Microsoft 365 Business Standard\"")
 	f.StringVar(&sku, "sku", "", "The vendor's identifier for the plan")
 	f.StringVar(&workspace, "workspace", "", "Workspace domain the seats belong to")
+	f.StringVar(&externalID, "external-id", "", "The vendor's own id for the pool")
+	f.StringVar(&subscription, "subscription", "", "The adaa subscription it is billed through (sub_…)")
 	f.IntVar(&seats, "seats", 0, "Seats bought")
 	f.StringVar(&term, "term", "", "Term: "+strings.Join(licenseTerms, ", "))
 	f.StringVar(&price, "price", "", "Price per seat in kroner, e.g. 149.00")
@@ -289,6 +293,60 @@ Pools that adaa reads from a connected workspace appear on their own.`,
 	f.StringVar(&notes, "notes", "", "Free-text notes")
 	enumFlag(cmd, "vendor", licenseVendors...)
 	enumFlag(cmd, "term", licenseTerms...)
+	return cmd
+}
+
+func newLicensesEditCmd(a *App) *cobra.Command {
+	var plan, notes, price string
+	var autoRenew bool
+	var threshold int
+	cmd := &cobra.Command{
+		Use:   "edit [license]",
+		Short: "Change a license pool's plan name, price, renewal or notes",
+		Long: `Change a license pool's details. The seat count is changed with 'adaa licenses
+seats', which previews the cost first.`,
+		Example: `  adaa licenses edit "Creative Cloud" --price 949.00 --auto-renew=false
+  adaa licenses edit lic_01J… --inactive-threshold 60`,
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: a.complete(kindLicense),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			body := fields{}
+			body.str(cmd, "plan", "plan_name", plan)
+			body.str(cmd, "notes", "notes", notes)
+			body.boolean(cmd, "auto-renew", "auto_renew", autoRenew)
+			body.integer(cmd, "inactive-threshold", "inactive_threshold_days", threshold)
+			if cmd.Flags().Changed("price") {
+				minor, err := devParseMinor(price)
+				if err != nil {
+					return usagef("--price: %v", err)
+				}
+				body["unit_price_minor"] = minor
+			}
+			if len(body) == 0 {
+				return usagef("nothing to change; pass at least one flag (see --help)")
+			}
+			id, err := a.Resolve(ctx, kindLicense, arg(args))
+			if err != nil {
+				return err
+			}
+			resp, o, err := a.Send(ctx, http.MethodPatch, "/licenses/"+id, map[string]any(body))
+			if err != nil {
+				return err
+			}
+			if a.JSON {
+				return a.PrintJSON(resp.Body)
+			}
+			a.IO.Successf("Updated %s", o.Str("plan_name"))
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&plan, "plan", "", "Plan name")
+	f.StringVar(&price, "price", "", "Price per seat in kroner, e.g. 149.00")
+	f.BoolVar(&autoRenew, "auto-renew", false, "Whether it renews by itself")
+	f.IntVar(&threshold, "inactive-threshold", 0, "Days without sign-in before a seat counts as unused")
+	f.StringVar(&notes, "notes", "", "Free-text notes")
 	return cmd
 }
 

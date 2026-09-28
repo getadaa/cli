@@ -19,12 +19,12 @@ var (
 	activityCategories = []string{"change", "execution", "access", "detection", "communication"}
 	actorKinds         = []string{"person", "agent", "connector", "system"}
 	activityOutcomes   = []string{"succeeded", "failed", "in_progress"}
-	entityTypes        = []string{"organization", "person", "entitlement", "resource", "device", "credential", "license",
+	entityTypes        = []string{"organization", "person", "identity", "membership", "entitlement", "resource", "device", "credential", "license",
 		"domain", "dns_record", "domain_transfer", "workspace", "workspace_account", "workspace_group", "mailbox",
 		"mail_domain", "server", "backup_job", "finding", "task", "request", "service", "subscription", "attachment", "token"}
 	// entityTypeByPrefix lets --entity take any id without also naming its type.
 	entityTypeByPrefix = map[string]string{
-		"org_": "organization", "per_": "person", "ent_": "entitlement", "res_": "resource", "dev_": "device",
+		"org_": "organization", "per_": "person", "idn_": "identity", "mem_": "membership", "ent_": "entitlement", "res_": "resource", "dev_": "device",
 		"crd_": "credential", "lic_": "license", "dom_": "domain", "dns_": "dns_record", "dtr_": "domain_transfer",
 		"wsp_": "workspace", "wac_": "workspace_account", "wgr_": "workspace_group", "mbx_": "mailbox",
 		"srv_": "server", "bkp_": "backup_job", "fnd_": "finding", "tsk_": "task", "req_": "request",

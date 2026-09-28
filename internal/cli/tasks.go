@@ -126,7 +126,11 @@ func (a *App) renderTask(t obj.Obj) {
 	}
 	switch {
 	case t.Str("approved_at") != "":
-		d.Field("Approved", a.IO.When(t.Str("approved_at")))
+		approved := a.IO.When(t.Str("approved_at"))
+		if by := t.Str("approved_by_person_id"); by != "" {
+			approved += " " + s.Dim("by "+by)
+		}
+		d.Field("Approved", approved)
 	case t.Bool("requires_approval"):
 		d.Field("Approval", s.Yellow("required before it runs"))
 	}
@@ -141,6 +145,9 @@ func (a *App) renderTask(t obj.Obj) {
 	d.Field("Completed", a.IO.When(t.Str("completed_at")))
 	if n, _ := t.Int("minutes_logged"); n > 0 {
 		d.Field("Time spent", fmt.Sprintf("%d min", n))
+	}
+	if n, _ := t.Int("attachment_count"); n > 0 {
+		d.Field("Attachments", fmt.Sprint(n))
 	}
 	if n, _ := t.Int("attempts"); n > 1 {
 		d.Field("Attempts", fmt.Sprint(n))
@@ -161,6 +168,9 @@ func (a *App) renderTask(t obj.Obj) {
 			}
 			if at := st.Str("at"); at != "" {
 				line += "  " + s.Dim(a.IO.When(at))
+			}
+			if by := st.Str("completed_by_person_id"); by != "" {
+				line += " " + s.Dim("by "+by)
 			}
 			for _, extra := range []string{st.Str("instruction"), st.Str("note")} {
 				if extra != "" {

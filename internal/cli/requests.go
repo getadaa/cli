@@ -33,7 +33,8 @@ an order. Something being broken is not a request — use 'adaa report'.`,
 		GroupID: groupCore,
 	}
 	cmd.AddCommand(newRequestsListCmd(a), newRequestsViewCmd(a), newRequestsNewCmd(a),
-		newRequestsReplyCmd(a), newRequestsCloseCmd(a), newRequestsReopenCmd(a), newRequestsAttachCmd(a))
+		newRequestsReplyCmd(a), newRequestsEditCmd(a), newRequestsCloseCmd(a), newRequestsReopenCmd(a),
+		newRequestsAttachCmd(a), newDetachCmd(a, "requests"))
 	return cmd
 }
 
@@ -136,6 +137,15 @@ func (a *App) renderRequest(ctx context.Context, r obj.Obj, msgs, atts []obj.Obj
 	if f := r.Str("finding_id"); f != "" {
 		fmt.Fprintf(w, "  %s %s\n", s.Dim("About finding"), f)
 	}
+	if res := r.Str("resource_id"); res != "" {
+		fmt.Fprintf(w, "  %s %s\n", s.Dim("About"), res)
+	}
+	if p := r.Str("person_id"); p != "" {
+		fmt.Fprintf(w, "  %s %s\n", s.Dim("Asked by"), p)
+	}
+	if at := r.Str("resolved_at"); at != "" {
+		fmt.Fprintf(w, "  %s %s\n", s.Dim("Resolved"), a.IO.When(at))
+	}
 	if tasks := r.Strings("task_ids"); len(tasks) > 0 {
 		fmt.Fprintf(w, "  %s %s\n", s.Dim("Work raised"), strings.Join(tasks, ", "))
 	}
@@ -173,7 +183,7 @@ func (a *App) renderRequest(ctx context.Context, r obj.Obj, msgs, atts []obj.Obj
 }
 
 func newRequestsNewCmd(a *App) *cobra.Command {
-	var kind, title, body, bodyFile, severity string
+	var kind, title, body, bodyFile, severity, resource string
 	cmd := &cobra.Command{
 		Use:     "new",
 		Aliases: []string{"create"},
@@ -224,6 +234,13 @@ func newRequestsNewCmd(a *App) *cobra.Command {
 			if severity != "" {
 				req["severity"] = severity
 			}
+			if resource != "" {
+				rid, err := a.Resolve(ctx, kindResource, resource)
+				if err != nil {
+					return err
+				}
+				req["resource_id"] = rid
+			}
 			path, err := a.OrgPath(ctx, "/requests")
 			if err != nil {
 				return err
@@ -246,7 +263,9 @@ func newRequestsNewCmd(a *App) *cobra.Command {
 	f.StringVar(&body, "body", "", "The details")
 	f.StringVar(&bodyFile, "body-file", "", "Read the details from a file, or - for stdin")
 	f.StringVar(&severity, "severity", "", "How urgent it is: info, warning or critical")
+	f.StringVar(&resource, "resource", "", "The thing it is about (see `adaa resources list`)")
 	enumFlag(cmd, "kind", requestKinds...)
+	_ = cmd.RegisterFlagCompletionFunc("resource", a.complete(kindResource))
 	enumFlag(cmd, "severity", findingSeverities...)
 	cmd.MarkFlagsMutuallyExclusive("body", "body-file")
 	return cmd
@@ -338,6 +357,42 @@ just no longer needed. 'adaa requests reopen' brings it back.`,
 		},
 	}
 	cmd.Flags().BoolVar(&resolved, "resolved", false, "Mark it resolved instead of closed")
+	return cmd
+}
+
+func newRequestsEditCmd(a *App) *cobra.Command {
+	var severity string
+	cmd := &cobra.Command{
+		Use:               "edit [request]",
+		Short:             "Change how urgent a request is",
+		Example:           `  adaa requests edit req_01JATX3M4K7Q2YV8N0RCBEZ5HS --severity critical`,
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: a.complete(kindRequest),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := oneOf("severity", severity, findingSeverities...); err != nil {
+				return err
+			}
+			if severity == "" {
+				return usagef("nothing to change; pass --severity")
+			}
+			ctx := cmd.Context()
+			id, err := a.Resolve(ctx, kindRequest, arg(args))
+			if err != nil {
+				return err
+			}
+			resp, r, err := a.Send(ctx, http.MethodPatch, "/requests/"+id, map[string]any{"severity": severity})
+			if err != nil {
+				return err
+			}
+			if a.JSON {
+				return a.PrintJSON(resp.Body)
+			}
+			a.IO.Successf("%s is now %s.", r.Str("title"), r.Str("severity"))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&severity, "severity", "", "How urgent it is: info, warning or critical")
+	enumFlag(cmd, "severity", findingSeverities...)
 	return cmd
 }
 

@@ -32,6 +32,7 @@ one at each and moves between them with 'adaa switch'.`,
 	}
 	cmd.AddCommand(
 		newMembersListCmd(a),
+		newMembersViewCmd(a),
 		newMembersGrantCmd(a),
 		newMembersRoleCmd(a),
 		newMembersRevokeCmd(a),
@@ -83,6 +84,42 @@ func newMembersListCmd(a *App) *cobra.Command {
 	}
 	addListFlags(cmd, &lo)
 	return cmd
+}
+
+func newMembersViewCmd(a *App) *cobra.Command {
+	return &cobra.Command{
+		Use:               "view [member]",
+		Short:             "Show who a member is and what they may do",
+		Example:           "  adaa members view kari@firma.no",
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: a.complete(kindMembership),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			id, err := a.Resolve(ctx, kindMembership, arg(args))
+			if err != nil {
+				return err
+			}
+			m, raw, err := a.Get(ctx, "/members/"+id, nil)
+			if err != nil {
+				return err
+			}
+			return a.PrintObj(raw, m, func(m obj.Obj) {
+				v := a.IO.NewDetail(m.Str("identity.full_name"), m.Str("membership.id"))
+				v.Field("Email", m.Str("identity.email"))
+				v.Field("Role", peopleRoleLabel(m.Str("membership.role")))
+				employee := a.dim("external")
+				if p := m.Str("membership.person_id"); p != "" {
+					employee = p
+				}
+				v.Field("Employee", employee)
+				v.Field("Since", a.IO.When(m.Str("membership.created_at")))
+				if r := m.Str("membership.revoked_at"); r != "" {
+					v.Field("Revoked", a.status("revoked")+" "+a.IO.When(r))
+				}
+				v.Render()
+			})
+		},
+	}
 }
 
 func newMembersGrantCmd(a *App) *cobra.Command {
@@ -225,7 +262,7 @@ func (a *App) membershipOfPerson(ctx context.Context, personID string) (obj.Obj,
 	if err != nil {
 		return nil, err
 	}
-	items, err := a.ListItems(ctx, path, nil)
+	items, err := a.List(ctx, path, nil, ListOpts{All: true})
 	if err != nil {
 		return nil, err
 	}
