@@ -53,12 +53,21 @@ adaa login --no-browser
 
 It prints a link and a short code, then waits — up to ten minutes — for a
 person to open the link, sign in to adaa in their browser if they are not
-already, check that the code matches and approve. Give the user the link and
-the code exactly as printed; it works from any device, a phone included. When
-they approve, `adaa login` finishes by itself and exits `0`. Run it with a
-long enough timeout (or in the background) that it can wait for them. Never
-open or approve the link yourself: approving is the person vouching that this
-terminal may act as them.
+already, type the code and approve. Give the user the link and the code
+exactly as printed, and tell them it is the sign-in you just started; it works
+from any device, a phone included. When they approve, `adaa login` finishes by
+itself and exits `0`. Run it with a long enough timeout (or in the background)
+that it can wait for them.
+
+Approving happens only on that page, and only a person can do it: the approval
+is them vouching that this terminal may act as them, so there is deliberately
+no command for it. Never try to approve a sign-in yourself, through
+`adaa api` or anything else, and never ask the user to approve a code they did
+not see you start.
+
+The session is for the company the user is acting on in the browser when they
+approve. If they work for several, say so before they approve, and use
+`adaa whoami` and `adaa switch` afterwards to land in the right one.
 
 If the user would rather not use a browser, `adaa login --email <address>`
 emails them a link; they paste it back and you run

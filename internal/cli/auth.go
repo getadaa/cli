@@ -36,10 +36,11 @@ func newLoginCmd(a *App) *cobra.Command {
 		Long: `Sign in to adaa.
 
 adaa has no passwords. 'adaa login' shows a short code and a link; open the link
-in a browser where you are signed in to adaa (or sign in there), check that the
-code matches, and approve. This terminal picks the session up by itself, so the
-browser can be on another device, such as your phone. The session is kept in
-your system keychain.
+in a browser where you are signed in to adaa (or sign in there), type the code,
+and approve. Only approve a code you started yourself: adaa never asks you to
+approve one. This terminal picks the session up by itself, so the browser can be
+on another device, such as your phone. The session is kept in your system
+keychain.
 
 --email signs in with a link sent to your email instead: paste the link (or the
 code in it) back here, or finish later with --code. For automation, create a
@@ -118,7 +119,7 @@ func (a *App) deviceLogin(ctx context.Context, noBrowser bool) error {
 	link := orNone(d.Str("verification_uri_complete"), d.Str("verification_uri"))
 	fmt.Fprintln(a.IO.Err, "Open this link and approve the sign-in:")
 	fmt.Fprintln(a.IO.Err, "  "+e.Bold(link))
-	fmt.Fprintln(a.IO.Err, "Check that it shows this code: "+e.Bold(d.Str("user_code")))
+	fmt.Fprintln(a.IO.Err, "Enter this code there when asked: "+e.Bold(d.Str("user_code")))
 	if a.IO.Interactive() && !noBrowser {
 		if err := openBrowser(link); err == nil {
 			a.IO.Infof("%s", e.Dim("Opened it in your browser."))
