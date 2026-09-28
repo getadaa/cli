@@ -123,6 +123,8 @@ release:
     scoop bucket add getadaa https://github.com/getadaa/scoop-bucket; scoop install adaa  # Windows
     ```
 
+    Or, anywhere else, `curl -fsSL https://raw.githubusercontent.com/getadaa/cli/main/install.sh | sh`
+    (`irm https://raw.githubusercontent.com/getadaa/cli/main/install.ps1 | iex` on Windows).
     Linux packages (`.deb`, `.rpm`, `.apk`) are attached below. Then:
 
     ```sh

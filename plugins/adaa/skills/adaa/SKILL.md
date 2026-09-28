@@ -11,7 +11,64 @@ touches is real: a person added here gets a mailbox and a paid seat, an
 offboarding revokes access, a restore overwrites live data. Treat every change
 as something the user will be billed for or will have to live with.
 
-## Start of every session
+## Setting up
+
+Do these in order the first time, and again whenever a step below fails.
+
+### 1. Is the CLI installed?
+
+```sh
+adaa --version
+```
+
+If the command is missing, install it. Installing software is the user's call:
+say what you are about to run and get their go-ahead first. Pick the first that
+fits:
+
+```sh
+brew install getadaa/tap/adaa                                            # macOS or Linux with Homebrew
+scoop bucket add getadaa https://github.com/getadaa/scoop-bucket         # Windows with Scoop,
+scoop install adaa                                                       # then this
+curl -fsSL https://raw.githubusercontent.com/getadaa/cli/main/install.sh | sh              # anything else, macOS or Linux
+irm https://raw.githubusercontent.com/getadaa/cli/main/install.ps1 | iex                  # anything else, Windows PowerShell
+```
+
+The scripts download the latest release, refuse it unless it matches the
+release's checksums, and install without sudo: to `~/.local/bin` (set
+`ADAA_INSTALL_DIR` to change it) or `%LOCALAPPDATA%\Programs\adaa`. If that
+directory is not on `PATH` yet, call adaa by its full path for the rest of the
+session and tell the user how to add it.
+
+### 2. Is somebody signed in?
+
+```sh
+adaa whoami
+```
+
+Exit code `3` means nobody is. Sign in with:
+
+```sh
+adaa login --no-browser
+```
+
+It prints a link and a short code, then waits — up to ten minutes — for a
+person to open the link, sign in to adaa in their browser if they are not
+already, check that the code matches and approve. Give the user the link and
+the code exactly as printed; it works from any device, a phone included. When
+they approve, `adaa login` finishes by itself and exits `0`. Run it with a
+long enough timeout (or in the background) that it can wait for them. Never
+open or approve the link yourself: approving is the person vouching that this
+terminal may act as them.
+
+If the user would rather not use a browser, `adaa login --email <address>`
+emails them a link; they paste it back and you run
+`adaa login --code '<link>'`. For unattended use they can instead create a
+token with `adaa tokens create` and set `ADAA_TOKEN`.
+
+A session lasts two weeks. When one expires, commands fail with exit code `3`:
+sign in again the same way.
+
+### 3. Check everything
 
 ```sh
 adaa doctor --fix
@@ -23,8 +80,9 @@ the config is intact, that the API is reachable (and the clock is right), that
 the session works, and that **this skill** is installed and identical to the
 published copy for every agent on the computer. It updates what it can: the
 CLI (through Homebrew, Scoop or a verified download), the skill, and a session
-kept outside the keychain. What it cannot fix it prints as a hint. Relay those
-to the user, especially "Not logged in" — signing in needs a person.
+kept outside the keychain. What it cannot fix it prints as a hint; relay those
+to the user. It never signs in without a person at the terminal — do step 2
+for that.
 
 `adaa doctor --json` gives the same checks as `{"ok": bool, "checks": [...]}`.
 
@@ -33,15 +91,21 @@ explains how to work; the help explains what exists in the version installed.
 
 ## Staying up to date
 
-- `adaa update` updates adaa the way it was installed. `adaa update --check`
-  only reports.
-- `adaa doctor --fix` does the same and also brings this skill up to date.
-- The skill is published in the `getadaa/plugins` marketplace. Claude Code
-  users can install it with `/plugin marketplace add getadaa/plugins` and
-  `/plugin install adaa@adaa`; anyone can use `adaa skill install`. Both are
-  the same file. `adaa skill status` lists every copy and whether it is current.
-- If a command in this file does not exist, the CLI is older than the skill:
-  run `adaa update`.
+Run `adaa doctor --fix` at the start of every session; it is the one command
+that keeps both halves current.
+
+- `adaa update` updates adaa the way it was installed: `brew upgrade`,
+  `scoop update`, or, for the install script, a verified download that
+  replaces the binary in place. `adaa update --check` only reports.
+- The skill is published in the `getadaa/plugins` marketplace and updates with
+  it. Claude Code users install it with `/plugin marketplace add getadaa/plugins`
+  and `/plugin install adaa@adaa`; anyone can use `adaa skill install`. Both
+  are the same file. `adaa skill status` lists every copy and whether it is
+  current, and `adaa doctor --fix` brings them up to date.
+- The CLI and this skill are released together. If a command in this file
+  does not exist, the CLI is older than the skill: run `adaa update`. If the
+  CLI has commands this file does not mention, the skill is older: run
+  `adaa doctor --fix`.
 
 ## You have no terminal
 
@@ -60,9 +124,8 @@ names the flag it needed. So:
   `--yes`. Never pass `--yes` to a change the user has not agreed to.
 - **Arguments must be explicit.** Given no record, commands open a picker;
   without a terminal that fails, so always pass the record.
-- **Sign-in is two steps.** `adaa login --email <address>` sends a link; the
-  user pastes it back and you run `adaa login --code '<link>'`. Or the user
-  sets `ADAA_TOKEN` (from `adaa tokens create`).
+- **Signing in waits for a person.** `adaa login` prints a link and a code and
+  blocks until somebody approves it in a browser; see "Setting up".
 - **One credential, one organization.** Somebody working for several customers
   — a consultant, a bookkeeper — signs in once and moves between them with
   `adaa switch`. `adaa whoami` lists the others under "Also yours". Check which
@@ -206,7 +269,8 @@ domain publishes through it.
 ## Rules
 
 1. Run `adaa doctor --fix` at the start and whenever something fails
-   unexpectedly. Report what it could not fix.
+   unexpectedly. Report what it could not fix. Ask before installing the CLI,
+   and never approve a sign-in yourself.
 2. Use `--dry-run` before any change that costs money or removes something,
    and show the user the preview. Pass `--yes` only after they agree.
 3. Never grant or change a role (`adaa members grant`, `adaa members role`)

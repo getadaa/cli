@@ -22,13 +22,28 @@ brew install getadaa/tap/adaa                                                   
 scoop bucket add getadaa https://github.com/getadaa/scoop-bucket && scoop install adaa  # Windows
 ```
 
+Anywhere else, the install script fetches the latest release and checks it
+against the release checksums, without sudo:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/getadaa/cli/main/install.sh | sh    # macOS, Linux
+irm https://raw.githubusercontent.com/getadaa/cli/main/install.ps1 | iex        # Windows
+```
+
 `.deb`, `.rpm` and `.apk` packages are attached to every
 [release](https://github.com/getadaa/cli/releases). Then:
 
 ```sh
-adaa login          # a sign-in link is sent to your email
+adaa login          # approve this terminal in your browser
 adaa doctor --fix   # checks the version, config, API, session and agent skill
 ```
+
+### For AI agents
+
+Install the agent skill from the `getadaa/plugins` marketplace
+(`/plugin marketplace add getadaa/plugins`, then `/plugin install adaa@adaa` in
+Claude Code) or with `adaa skill install`. The skill knows how to install the
+CLI, have you approve a sign-in, and keep both up to date.
 
 ## Using it
 
