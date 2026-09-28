@@ -99,7 +99,7 @@ func (a *App) rolesByPerson(ctx context.Context) map[string]string {
 	if err != nil {
 		return nil
 	}
-	items, err := a.ListItems(ctx, path, nil)
+	items, err := a.List(ctx, path, nil, ListOpts{All: true})
 	if err != nil {
 		return nil
 	}
@@ -193,19 +193,17 @@ func (a *App) renderPerson(p obj.Obj, ents *Listing, asg obj.Obj, member obj.Obj
 		licenses := asg.List("license_seats")
 		subs := asg.List("subscription_seats")
 		devices := asg.List("devices")
-		others := asg.List("other_resources")
-		if len(accounts)+len(licenses)+len(subs)+len(devices)+len(others) > 0 {
+		if len(accounts)+len(licenses)+len(subs)+len(devices) > 0 {
 			d.Section("Has")
 		}
 		for _, w := range accounts {
-			line := w.Str("user_principal_name") + " " + s.Dim(w.Str("vendor")+" account") + " " + a.status(w.Str("status"))
-			if w.Has("mfa_enabled") && !w.Bool("mfa_enabled") {
-				line += " " + s.Yellow("no MFA")
-			}
-			d.Line(line)
+			d.Line(w.Str("user_principal_name") + " " + s.Dim("account") + " " + a.status(w.Str("status")))
 		}
 		for _, l := range licenses {
 			line := l.Str("plan_name") + " " + s.Dim(l.Str("vendor")+" seat")
+			if m, ok := l.Int("monthly_cost_minor"); ok {
+				line += " " + s.Dim(ui.Money(m, "")+"/month")
+			}
 			if n, ok := l.Int("inactive_days"); ok && n > 0 {
 				line += " " + s.Yellow(fmt.Sprintf("unused for %d days", n))
 			}
@@ -219,23 +217,15 @@ func (a *App) renderPerson(p obj.Obj, ents *Listing, asg obj.Obj, member obj.Obj
 			d.Line(line)
 		}
 		for _, dev := range devices {
-			d.Line(dev.Str("name") + " " + s.Dim(dev.Str("kind")) + " " + a.status(dev.Str("status")))
+			d.Line(join(" ", dev.Str("name"), s.Dim(join(" · ", dev.Str("kind"), dev.Str("model"))), a.status(dev.Str("status"))))
 		}
-		for _, r := range others {
-			d.Line(r.Str("display_name") + " " + s.Dim(r.Str("kind")) + " " + a.status(r.Str("state")))
-		}
-		if c := asg.Obj("cost"); c != nil {
-			if m, ok := c.Int("monthly_minor"); ok {
-				d.Section("Cost")
-				line := ui.Money(m, c.Str("currency")) + " per month"
-				if w, ok := c.Int("wasted_monthly_minor"); ok && w > 0 {
-					line += ", " + s.Yellow(ui.Money(w, c.Str("currency"))+" of it unused")
-				}
-				if n, _ := c.Int("lines_awaiting_price"); n > 0 {
-					line += s.Dim(" (estimate)")
-				}
-				d.Line(line)
+		if m, ok := asg.Int("monthly_total_minor"); ok {
+			d.Section("Cost")
+			line := ui.Money(m, "") + " per month"
+			if n, _ := asg.Int("unpriced_count"); n > 0 {
+				line += s.Dim(fmt.Sprintf(" (an estimate: %d not priced yet)", n))
 			}
+			d.Line(line)
 		}
 	}
 	d.Render()
@@ -599,7 +589,7 @@ and forwarded to a colleague.`,
 			if lastDay != "" {
 				body["ended_on"] = lastDay
 			}
-			if keepDays > 0 {
+			if keepDays > 0 || cmd.Flags().Changed("keep-mailbox-days") {
 				body["keep_mailbox_days"] = keepDays
 			}
 			if note != "" {
@@ -627,7 +617,7 @@ and forwarded to a colleague.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&lastDay, "last-day", "", "Last working day, YYYY-MM-DD (default today)")
-	f.IntVar(&keepDays, "keep-mailbox-days", 0, "Keep the mailbox this many days before archiving it")
+	f.IntVar(&keepDays, "keep-mailbox-days", 0, "Keep the mailbox this many days before archiving it (0 archives it straight away)")
 	f.StringVar(&forwardTo, "forward-mail-to", "", "Forward their mail to this person (email, name or id)")
 	f.StringVar(&note, "note", "", "Note for whoever does the work")
 	addDryRunFlag(cmd, &dryRun)
@@ -864,7 +854,7 @@ func newPeopleResourcesCmd(a *App) *cobra.Command {
 				[]string{"ID", "Name", "Kind", "State", "Managed"},
 				func(r obj.Obj) []string {
 					return []string{a.dim(r.Str("id")), r.Str("display_name"), strings.ReplaceAll(r.Str("kind"), "_", " "),
-						a.status(r.Str("state")), r.Str("managed")}
+						a.status(r.Str("state")), map[bool]string{true: "yes", false: a.dim("no")}[r.Bool("managed")]}
 				})
 		},
 	}

@@ -33,7 +33,7 @@ a license seat, a laptop, a virtual machine, a backup job — in one uniform
 list, whatever product it belongs to.`,
 		GroupID: groupCore,
 	}
-	cmd.AddCommand(newResourcesListCmd(a), newResourcesViewCmd(a), newResourcesAssignCmd(a))
+	cmd.AddCommand(newResourcesListCmd(a), newResourcesViewCmd(a), newResourcesAssignCmd(a), newResourcesEditCmd(a))
 	return cmd
 }
 
@@ -234,6 +234,40 @@ func signalValue(s obj.Obj) string {
 		return join(" ", v, unit)
 	}
 	return ""
+}
+
+func newResourcesEditCmd(a *App) *cobra.Command {
+	var notes string
+	cmd := &cobra.Command{
+		Use:               "edit [resource]",
+		Short:             "Change a resource's notes",
+		Example:           `  adaa resources edit res_01JATX3M4K7Q2YV8N0RCBEZ5HS --notes "Kept for the accountant"`,
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: a.complete(kindResource),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			body := fields{}
+			body.str(cmd, "notes", "notes", notes)
+			if len(body) == 0 {
+				return usagef("nothing to change; pass --notes")
+			}
+			ctx := cmd.Context()
+			id, err := a.Resolve(ctx, kindResource, arg(args))
+			if err != nil {
+				return err
+			}
+			resp, r, err := a.Send(ctx, http.MethodPatch, "/resources/"+id, map[string]any(body))
+			if err != nil {
+				return err
+			}
+			if a.JSON {
+				return a.PrintJSON(resp.Body)
+			}
+			a.IO.Successf("Updated %s", r.Str("display_name"))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&notes, "notes", "", "Free-text notes (empty clears them)")
+	return cmd
 }
 
 func newResourcesAssignCmd(a *App) *cobra.Command {

@@ -39,7 +39,12 @@ type FieldProblem struct {
 func (f FieldProblem) Name() string {
 	switch {
 	case f.Location != "":
-		return strings.TrimPrefix(f.Location, "body.")
+		for _, in := range []string{"body.", "query.", "path.", "header."} {
+			if name, ok := strings.CutPrefix(f.Location, in); ok {
+				return name
+			}
+		}
+		return f.Location
 	case f.Field != "":
 		return f.Field
 	}

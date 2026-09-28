@@ -190,34 +190,38 @@ func (a *App) renderDevice(d obj.Obj) {
 		v.Field("Management", n.Str("management_ip"))
 		v.Field("Ports", n.Str("port_count"))
 	}
-	if d.Bool("agent_installed") {
-		seen := d.Str("agent_last_seen_at")
-		if seen == "" {
-			v.Field("Agent", s.Yellow("installed, never reported"))
-		} else {
-			v.Field("Agent", "last seen "+a.IO.When(seen))
-		}
-	}
 
 	v.Section("Purchase")
 	v.Field("Supplier", d.Str("supplier"))
 	v.Field("Bought", d.Str("purchased_on"))
-	if age, ok := d.Int("age_months"); ok {
-		v.Field("Age", fmt.Sprintf("%d months", age))
+	if bought, err := time.Parse("2006-01-02", d.Str("purchased_on")); err == nil {
+		v.Field("Age", devAge(bought, time.Now()))
 	}
 	v.Field("Price", money(d, "purchase_price_minor"))
 	v.Field("Warranty", warrantyText(s, d.Str("warranty_expires_on"), time.Now()))
-	if n, _ := d.Int("credential_count"); n > 0 {
-		v.Field("Credentials", fmt.Sprintf("%d stored", n))
-	}
+	v.Field("Subscription", d.Str("subscription_id"))
+	v.Field("Resource", d.Str("resource_id"))
 	if notes := d.Str("notes"); notes != "" {
 		v.Section("Notes")
 		v.Line(notes)
 	}
 	v.Render()
-	if n, _ := d.Int("credential_count"); n > 0 {
-		a.IO.Hint("adaa credentials list --device %s", d.Str("id"))
+}
+
+func devAge(bought, now time.Time) string {
+	months := (now.Year()-bought.Year())*12 + int(now.Month()-bought.Month())
+	if now.Day() < bought.Day() {
+		months--
 	}
+	switch {
+	case months < 1:
+		return "under a month"
+	case months == 1:
+		return "1 month"
+	case months < 24:
+		return fmt.Sprintf("%d months", months)
+	}
+	return fmt.Sprintf("%d years", months/12)
 }
 
 // devHolder names who holds a device. The API gives only the person's id, so
@@ -273,7 +277,7 @@ func warrantyText(s ui.Palette, date string, now time.Time) string {
 // deviceFlags are the writable fields shared by add and edit.
 type deviceFlags struct {
 	name, hostname, status, ownership, location, manufacturer, model, serial, assetTag string
-	ip, supplier, purchasedOn, price, warranty, notes                                  string
+	ip, supplier, purchasedOn, price, warranty, notes, subscription                    string
 	macs                                                                               []string
 	managed                                                                            bool
 }
@@ -297,6 +301,7 @@ func (df *deviceFlags) register(cmd *cobra.Command) {
 	f.StringVar(&df.price, "price", "", "Purchase price in kroner, e.g. 12999.00")
 	f.StringVar(&df.warranty, "warranty-until", "", "Warranty end date, YYYY-MM-DD")
 	f.StringVar(&df.notes, "notes", "", "Free-text notes")
+	f.StringVar(&df.subscription, "subscription", "", "The subscription it comes with, e.g. a leased laptop (sub_…)")
 	enumFlag(cmd, "status", deviceStatuses...)
 	enumFlag(cmd, "ownership", deviceOwnerships...)
 }
@@ -329,6 +334,7 @@ func (df *deviceFlags) body(cmd *cobra.Command) (fields, error) {
 	b.str(cmd, "purchased-on", "purchased_on", df.purchasedOn)
 	b.str(cmd, "warranty-until", "warranty_expires_on", df.warranty)
 	b.str(cmd, "notes", "notes", df.notes)
+	b.str(cmd, "subscription", "subscription_id", df.subscription)
 	if cmd.Flags().Changed("mac") {
 		macs := []string{}
 		for _, m := range df.macs {

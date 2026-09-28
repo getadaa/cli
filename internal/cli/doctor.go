@@ -62,7 +62,7 @@ func newDoctorCmd(a *App) *cobra.Command {
   config       is the config readable and private?         fix: repair it
   api          can this computer reach the adaa API?       (clock checked too)
   keychain     is the session stored safely?               fix: move it to the keychain
-  login        is there a working session?                 fix: sign in (needs a terminal)
+  login        is there a working session?                 fix: sign in (a person approves it in a browser)
   skill        is the agent skill installed, and is every  fix: install or update it
                copy the same as the published one?
 
@@ -319,14 +319,19 @@ func (a *App) checkLogin(ctx context.Context) []*check {
 	login := &check{ID: "login"}
 	checks = append(checks, login)
 	relogin := func(ctx context.Context) error {
+		// Signing in waits for a person to approve it in a browser, which is
+		// not something a check should start without a person at the terminal.
 		if !a.IO.Interactive() {
-			return errors.New("signing in needs a terminal; run `adaa login`")
+			return errors.New("signing in needs a person to approve it; run `adaa login` and have them open the link it prints")
 		}
 		if src != auth.SourceEnv {
 			_ = auth.Clear(a.Cfg)
 		}
 		a.client, a.identity = nil, nil
-		return newLoginCmd(a).RunE(&cobra.Command{}, nil)
+		if err := a.deviceLogin(ctx, false); !errors.Is(err, errNoDeviceFlow) {
+			return err
+		}
+		return a.emailLogin(ctx, "", "")
 	}
 	if token == "" {
 		login.Status = checkFail

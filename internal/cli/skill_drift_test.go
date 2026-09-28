@@ -22,6 +22,8 @@ func TestSkillMatchesCommandTree(t *testing.T) {
 	}
 	a := &App{IO: ui.Test(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})}
 	root := a.NewRoot()
+	// Cobra adds --version when the root runs rather than when it is built.
+	root.InitDefaultVersionFlag()
 
 	invocations := skillInvocations(string(b))
 	if len(invocations) < 20 {

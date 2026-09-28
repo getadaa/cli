@@ -140,7 +140,7 @@ is touched. Tests also run on a schedule; this runs one now.`,
 			if err := a.Confirm("Run a restore test now? It restores into a scratch location and touches nothing live."); err != nil {
 				return err
 			}
-			resp, o, err := a.Send(ctx, http.MethodPost, "/backups/"+id+"/restore-test", map[string]any{})
+			resp, o, err := a.Send(ctx, http.MethodPost, "/backups/"+id+"/restore-test", nil)
 			if err != nil {
 				return err
 			}

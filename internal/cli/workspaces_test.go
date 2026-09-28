@@ -10,52 +10,62 @@ import (
 
 const (
 	testWorkspace = "wsp_01JATX3M4K7Q2YV8N0RCBEZ5HS"
-	testWSAuth    = "wau_01JATX3M4K7Q2YV8N0RCBEZ5HS"
 	testWSAccount = "wac_01JATX3M4K7Q2YV8N0RCBEZ5HS"
 )
 
 func TestWorkspacesConnectWaitsForConsent(t *testing.T) {
-	orig := wsPollInterval
-	wsPollInterval = 10 * time.Millisecond
-	t.Cleanup(func() { wsPollInterval = orig })
+	orig := consentPollInterval
+	consentPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { consentPollInterval = orig })
 
 	f := newFakeAPI(t)
-	auth := map[string]any{"id": testWSAuth, "vendor": "microsoft_365", "status": "pending",
+	f.on("GET /organizations/"+testOrg+"/providers", 200, map[string]any{"items": testProviders})
+	conn := map[string]any{"id": testConnection, "provider": "microsoft_365", "method": "oauth", "name": "firma.no", "status": "pending",
 		"consent_url": "https://login.microsoftonline.com/consent?x=1", "state": "s",
 		"grants": []any{map[string]any{"summary": map[string]any{"text": "Read users"}, "write": false}}}
-	f.on("POST /organizations/"+testOrg+"/workspaces/connect", 201, auth)
+	f.on("POST /organizations/"+testOrg+"/provider-connections", 201, conn)
 	var polls atomic.Int32
-	f.onFunc("GET /workspace-authorizations/"+testWSAuth, func(w http.ResponseWriter, r *http.Request) {
+	f.onFunc("GET /provider-connections/"+testConnection, func(w http.ResponseWriter, r *http.Request) {
 		cur := map[string]any{}
-		for k, v := range auth {
+		for k, v := range conn {
 			cur[k] = v
 		}
 		if polls.Add(1) >= 2 {
-			cur["status"] = "granted"
+			cur["status"] = "unknown"
 			cur["workspace_id"] = testWorkspace
 		}
 		writeJSON(w, 200, cur)
 	})
 
 	r := f.run("workspaces", "connect", "--vendor", "microsoft_365", "--domain", "firma.no", "--redirect-uri", "https://adaa.no/cb").mustSucceed(t)
-	for _, want := range []string{"Read users", "login.microsoftonline.com", "Connected " + testWorkspace} {
+	for _, want := range []string{"Read users", "login.microsoftonline.com", "Connected firma.no", testWorkspace} {
 		if !strings.Contains(r.Stderr, want) {
 			t.Errorf("stderr lacks %q:\n%s", want, r.Stderr)
 		}
 	}
-	reqs := f.requests("POST", "/organizations/"+testOrg+"/workspaces/connect")
-	if len(reqs) != 1 || reqs[0].Body["redirect_uri"] != "https://adaa.no/cb" || reqs[0].Body["primary_domain"] != "firma.no" {
-		t.Errorf("connect body: %+v", reqs)
+	reqs := f.requests("POST", "/organizations/"+testOrg+"/provider-connections")
+	if len(reqs) != 1 {
+		t.Fatalf("connect: %+v", reqs)
+	}
+	b := reqs[0].Body
+	if b["provider"] != "microsoft_365" || b["method"] != "oauth" || b["account"] != "firma.no" || b["name"] != "firma.no" || b["redirect_uri"] != "https://adaa.no/cb" {
+		t.Errorf("connect body: %v", b)
 	}
 }
 
-func TestWorkspacesAuthorizationCompletesFromCallbackURL(t *testing.T) {
+func TestWorkspacesReauthorizeRenewsItsConnection(t *testing.T) {
 	f := newFakeAPI(t)
-	f.on("POST /workspace-authorizations/"+testWSAuth+"/complete", 201, map[string]any{"id": testWorkspace, "primary_domain": "firma.no"})
-	f.run("workspaces", "authorization", testWSAuth, "--callback-url", "http://localhost:1234/callback?code=abc&state=xyz").mustSucceed(t)
-	reqs := f.requests("POST", "/workspace-authorizations/"+testWSAuth+"/complete")
-	if len(reqs) != 1 || reqs[0].Body["code"] != "abc" || reqs[0].Body["state"] != "xyz" {
-		t.Errorf("complete: %+v", reqs)
+	f.on("GET /organizations/"+testOrg+"/provider-connections", 200, page(
+		map[string]any{"id": "pcn_01JATY03B4C5D6E7F8G9H0J1K3", "workspace_id": testWorkspace, "status": "revoked"},
+		map[string]any{"id": testConnection, "workspace_id": testWorkspace, "status": "unauthorized"}))
+	f.on("POST /provider-connections/"+testConnection+"/renew", 201, map[string]any{"id": testConnection, "status": "pending",
+		"consent_url": "https://accounts.google.com/o/oauth2?x=1"})
+	r := f.run("workspaces", "reauthorize", testWorkspace, "--no-wait").mustSucceed(t)
+	if !strings.Contains(r.Stdout, "accounts.google.com") {
+		t.Errorf("stdout should hold the consent link: %q", r.Stdout)
+	}
+	if n := len(f.requests("POST", "/provider-connections/"+testConnection+"/renew")); n != 1 {
+		t.Errorf("renew calls: %d", n)
 	}
 }
 

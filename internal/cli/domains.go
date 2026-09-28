@@ -20,6 +20,10 @@ func init() { register(newDomainsCmd) }
 
 var productCodes = []string{"mail", "workspace", "server", "backup", "license", "device"}
 
+// domainManagement is who runs a domain's zone. Only adaa and external can be
+// chosen when adding one; provider needs a connection, set with edit.
+var domainManagement = []string{"adaa", "provider", "external"}
+
 func newDomainsCmd(a *App) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "domains",
@@ -27,8 +31,10 @@ func newDomainsCmd(a *App) *cobra.Command {
 		Short:   "Domains, their DNS records, SPF and registrar transfers",
 		Long: `Domains the company uses, and the DNS records its services need.
 
-A domain is either managed by adaa (we run the zone) or external (DNS stays at
-your registrar; adaa says what should be there and checks that it is).`,
+A domain's DNS is managed by adaa (we run the zone in our account), provider
+(we run it in an account you hold at your own DNS host, connected with 'adaa
+connections add') or external (somebody else runs DNS; adaa says what should be
+there and checks that it is).`,
 		GroupID: groupProducts,
 	}
 	cmd.AddCommand(
@@ -50,7 +56,7 @@ func newDomainsListCmd(a *App) *cobra.Command {
   adaa domains list --management external`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := oneOf("management", management, "adaa", "external"); err != nil {
+			if err := oneOf("management", management, domainManagement...); err != nil {
 				return err
 			}
 			path, err := a.OrgPath(cmd.Context(), "/domains")
@@ -72,8 +78,8 @@ func newDomainsListCmd(a *App) *cobra.Command {
 		},
 	}
 	addListFlags(cmd, &lo)
-	cmd.Flags().StringVar(&management, "management", "", "Only adaa or external domains")
-	enumFlag(cmd, "management", "adaa", "external")
+	cmd.Flags().StringVar(&management, "management", "", "Only domains managed this way: adaa, provider or external")
+	enumFlag(cmd, "management", domainManagement...)
 	return cmd
 }
 
@@ -124,7 +130,7 @@ func (a *App) renderDomain(d obj.Obj) {
 		return "off"
 	}
 	v := a.IO.NewDetail(d.Str("name"), d.Str("id"))
-	v.Field("Management", d.Str("management"))
+	v.Field("Management", join(" ", d.Str("management"), a.dim(d.Str("dns_connection_id"))))
 	v.Field("Verification", a.status(d.Str("verification_status")))
 	v.Field("Summary", d.Str("summary"))
 	v.Field("Records", domainRecordSummary(a, d))
@@ -222,21 +228,41 @@ where it is; adaa then tells you what records to publish and checks them.`,
 }
 
 func newDomainsEditCmd(a *App) *cobra.Command {
-	var management, registrar, registeredUntil, notes string
+	var management, connection, registrar, registeredUntil, notes string
 	var autoRenew, transferLock bool
 	cmd := &cobra.Command{
 		Use:   "edit [domain]",
 		Short: "Change a domain's settings",
+		Long: `Change a domain's settings. --dns-connection moves the zone into an account you
+hold at your own DNS host and implies --management provider; --management adaa
+brings it back to adaa's own account.`,
 		Example: `  adaa domains edit firma.no --auto-renew
-  adaa domains edit firma.no --transfer-lock=false`,
+  adaa domains edit firma.no --transfer-lock=false
+  adaa domains edit firma.no --dns-connection "Bunny DNS"`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: a.complete(kindDomain),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := oneOf("management", management, "adaa", "external"); err != nil {
+			ctx := cmd.Context()
+			if err := oneOf("management", management, domainManagement...); err != nil {
 				return err
 			}
+			if connection != "" && management != "" && management != "provider" {
+				return usagef("--dns-connection goes with --management provider")
+			}
 			body := fields{}
-			body.str(cmd, "management", "management", management)
+			if connection != "" {
+				cid, err := a.Resolve(ctx, kindConnection, connection)
+				if err != nil {
+					return err
+				}
+				body["dns_connection_id"] = cid
+				management = "provider"
+			} else if management == "provider" {
+				return usagef("--management provider needs --dns-connection naming the account to publish in")
+			}
+			if management != "" {
+				body["management"] = management
+			}
 			body.str(cmd, "registrar", "registrar", registrar)
 			body.str(cmd, "registered-until", "registered_until", registeredUntil)
 			body.str(cmd, "notes", "notes", notes)
@@ -245,7 +271,7 @@ func newDomainsEditCmd(a *App) *cobra.Command {
 			if len(body) == 0 {
 				return usagef("nothing to change; pass at least one flag (see --help)")
 			}
-			id, err := a.Resolve(cmd.Context(), kindDomain, arg(args))
+			id, err := a.Resolve(ctx, kindDomain, arg(args))
 			if err != nil {
 				return err
 			}
@@ -266,13 +292,15 @@ func newDomainsEditCmd(a *App) *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&management, "management", "", "Who runs DNS: adaa or external")
+	f.StringVar(&management, "management", "", "Who runs DNS: adaa, provider or external")
+	f.StringVar(&connection, "dns-connection", "", "Publish the zone in this DNS host account (see `adaa connections list`)")
 	f.StringVar(&registrar, "registrar", "", "Where the domain is registered")
 	f.StringVar(&registeredUntil, "registered-until", "", "Registration expiry, YYYY-MM-DD")
 	f.StringVar(&notes, "notes", "", "Free-text notes")
 	f.BoolVar(&autoRenew, "auto-renew", false, "Renew the registration automatically")
 	f.BoolVar(&transferLock, "transfer-lock", false, "Registrar lock against transfers (only where adaa is the registrar)")
-	enumFlag(cmd, "management", "adaa", "external")
+	enumFlag(cmd, "management", domainManagement...)
+	_ = cmd.RegisterFlagCompletionFunc("dns-connection", a.complete(kindConnection))
 	return cmd
 }
 
@@ -829,7 +857,9 @@ func (a *App) renderTransfer(t obj.Obj) {
 	v.Field("To", t.Str("to_registrar"))
 	v.Field("Approval sent to", t.Str("approval_sent_to"))
 	v.Field("Possible from", t.Str("eligible_on"))
-	v.Field("Expected done", a.IO.When(t.Str("estimated_completion_at")))
+	v.Field("Submitted", a.IO.When(t.Str("submitted_at")))
+	v.Field("Approved", a.IO.When(t.Str("approved_at")))
+	v.Field("Completed", a.IO.When(t.Str("completed_at")))
 	v.Field("Failure", join(": ", t.Str("failure_code"), t.Str("failure_reason")))
 	v.Field("Cancelled", t.Str("cancelled_reason"))
 	if dc := t.Obj("dns_continuity"); dc != nil {
@@ -840,6 +870,9 @@ func (a *App) renderTransfer(t obj.Obj) {
 		}
 		v.Field("Strategy", strategy)
 		v.Field("Summary", dc.Str("summary"))
+		if n, ok := dc.Int("records_captured"); ok {
+			v.Field("Records captured", fmt.Sprint(n))
+		}
 		if n, _ := dc.Int("records_unknown"); n > 0 {
 			v.Field("Unknown records", s.Yellow(fmt.Sprintf("%d records at the old registrar we cannot see", n)))
 		}

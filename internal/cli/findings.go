@@ -38,7 +38,7 @@ or a problem somebody reported with 'adaa report'. Both live in one list.`,
 		GroupID: groupCore,
 	}
 	cmd.AddCommand(newFindingsListCmd(a), newFindingsViewCmd(a), newFindingsResolveCmd(a),
-		newFindingsIgnoreCmd(a), newFindingsAttachCmd(a))
+		newFindingsIgnoreCmd(a), newFindingsAttachCmd(a), newDetachCmd(a, "findings"))
 	return cmd
 }
 
@@ -70,15 +70,14 @@ with --closed or a --status.`,
 			setQuery(q, cmd, "status", "status", status)
 			setQuery(q, cmd, "severity", "severity", severity)
 			setQuery(q, cmd, "kind", "kind", kind)
-			l, err := a.List(ctx, path, q, lo)
+			var l *Listing
+			if status == "" && !closed {
+				l, err = a.listOpenFindings(ctx, path, q, lo)
+			} else {
+				l, err = a.List(ctx, path, q, lo)
+			}
 			if err != nil {
 				return err
-			}
-			if status == "" && !closed {
-				l = filterListing(l, func(o obj.Obj) bool {
-					s := o.Str("status")
-					return s != "closed" && s != "resolved"
-				})
 			}
 			return a.PrintListing(l, "No open findings. Everything adaa can see looks right.",
 				[]string{"Severity", "Summary", "Status", "Seen", "ID"},
@@ -193,6 +192,31 @@ func attachmentLine(a *App, at obj.Obj) string {
 		line += " — " + c
 	}
 	return line + a.dim("  "+at.Str("id"))
+}
+
+// newDetachCmd removes an attachment. An attachment id is enough on its own,
+// so findings and requests share it.
+func newDetachCmd(a *App, group string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "detach <attachment>",
+		Short:   "Remove an attached file",
+		Example: "  adaa " + group + " detach att_01JATX3M4K7Q2YV8N0RCBEZ5HS",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := strings.TrimSpace(args[0])
+			if !strings.HasPrefix(id, "att_") {
+				return usagef("pass an attachment id (att_…); `adaa %s view` lists them", group)
+			}
+			if err := a.Confirm("Remove " + id + "?"); err != nil {
+				return err
+			}
+			if _, err := a.Do(cmd.Context(), http.MethodDelete, "/attachments/"+id, nil, nil); err != nil {
+				return err
+			}
+			a.IO.Successf("Removed %s.", id)
+			return nil
+		},
+	}
 }
 
 func newFindingsResolveCmd(a *App) *cobra.Command {
@@ -436,6 +460,30 @@ func (a *App) attachFiles(ctx context.Context, path string, files []string, capt
 }
 
 // filterListing keeps the items (and their raw JSON) that keep returns true for.
+// listOpenFindings pages until it has a page's worth of findings that are not
+// closed. The API filters on one status only, so the rest are dropped here and
+// a page could otherwise come back short while open ones wait further on.
+func (a *App) listOpenFindings(ctx context.Context, path string, q url.Values, lo ListOpts) (*Listing, error) {
+	out := &Listing{}
+	for {
+		l, err := a.List(ctx, path, q, lo)
+		if err != nil {
+			return nil, err
+		}
+		l = filterListing(l, func(o obj.Obj) bool {
+			s := o.Str("status")
+			return s != "closed" && s != "resolved"
+		})
+		out.Items = append(out.Items, l.Items...)
+		out.Raw = append(out.Raw, l.Raw...)
+		out.Next = l.Next
+		if l.Next == "" || lo.All || len(out.Items) >= lo.Limit {
+			return out, nil
+		}
+		q.Set("cursor", l.Next)
+	}
+}
+
 func filterListing(l *Listing, keep func(obj.Obj) bool) *Listing {
 	out := &Listing{Next: l.Next}
 	for n, it := range l.Items {
