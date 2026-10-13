@@ -234,7 +234,17 @@ adaa activity --since 24h
 
 Products each have their own group: `adaa mail`, `adaa domains` (with `dns`,
 `spf`, `transfer`), `adaa workspaces`, `adaa servers`, `adaa backups`.
-`adaa products` lists them. For anything without a command, `adaa api <path>`
+`adaa products` lists them.
+
+`adaa mail mailboxes password kari@firma.no` chooses a new mailbox password
+(rule 4: only when the user asked). Run interactively it prompts twice; from an
+agent, pipe it in with `--secret-stdin`. It then follows the password until the
+mail supplier has it, for up to 20 seconds: exit 0 with "changed" when it has,
+exit 1 when the supplier refused it (adaa retries, and the old password works
+until then), and a warning, still exit 0, when it is only slow. `--no-wait`
+returns once it is saved.
+
+For anything without a command, `adaa api <path>`
 calls the API directly (`{org}` in the path is filled in), e.g.
 `adaa api '/organizations/{org}/people' --paginate`.
 
@@ -293,8 +303,8 @@ domain publishes through it.
    logged against the user, and the API may refuse agents outright
    (`agents-may-not-reveal`): tell the user to do it themselves.
 5. Never put secrets in command lines. `adaa credentials add`,
-   `adaa credentials rotate` and `adaa connections add` read them with
-   `--secret-stdin`.
+   `adaa credentials rotate`, `adaa connections add` and
+   `adaa mail mailboxes password` read them with `--secret-stdin`.
 6. Prefer `--json` when you need to read results, and ids over names once
    you have them.
 7. When the API refuses something (exit 6), read `how_to_resolve` and relay

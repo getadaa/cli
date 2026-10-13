@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/getadaa/cli/internal/api"
 	"github.com/getadaa/cli/internal/obj"
@@ -31,7 +34,7 @@ instead; see 'adaa workspaces'.`,
 	}
 	boxes := &cobra.Command{Use: "mailboxes", Aliases: []string{"mailbox"}, Short: "Personal and shared mailboxes"}
 	boxes.AddCommand(newMailboxesListCmd(a), newMailboxesViewCmd(a), newMailboxesAddCmd(a),
-		newMailboxesEditCmd(a), newMailboxesArchiveCmd(a))
+		newMailboxesEditCmd(a), newMailboxesPasswordCmd(a), newMailboxesArchiveCmd(a))
 	cmd.AddCommand(newMailViewCmd(a), newMailSetupCmd(a), boxes, newMailMigrationsCmd(a),
 		newMailMigrationCmd(a), newMailDeliverabilityCmd(a))
 	return cmd
@@ -423,6 +426,116 @@ func newMailboxesEditCmd(a *App) *cobra.Command {
 	f.IntVar(&quotaGB, "quota-gb", 0, "Size limit, in GiB")
 	cmd.MarkFlagsMutuallyExclusive("forward-to", "no-forward")
 	return cmd
+}
+
+// followPasswordFor is how long a new password is followed before the command
+// says it is taking longer than usual and returns. Short, because somebody is
+// watching a spinner; the password is saved either way.
+const followPasswordFor = 20 * time.Second
+
+func newMailboxesPasswordCmd(a *App) *cobra.Command {
+	var secretStdin, noWait bool
+	cmd := &cobra.Command{
+		Use:   "password [mailbox]",
+		Short: "Choose a new password for a mailbox",
+		Long: `Choose a new password for a mailbox: your own, or anybody's as an
+administrator. At least twelve characters; nothing else is required of it.
+
+The password is saved in adaa's vault and then set at the mail supplier. The
+command follows it until the supplier has it, for up to 20 seconds; the old
+password works until then. With --no-wait it returns once it is saved.`,
+		Example: `  adaa mail mailboxes password kari@firma.no
+  op read op://Private/kari-mail/password | adaa mail mailboxes password kari@firma.no --secret-stdin`,
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: a.complete(kindMailbox),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			id, err := a.Resolve(ctx, kindMailbox, arg(args))
+			if err != nil {
+				return err
+			}
+			password, err := a.readSecret(secretStdin, "New password")
+			if err != nil {
+				return err
+			}
+			// Typed twice, because nobody can read it back and a typo locks
+			// somebody out of their own mail. Piped in, it was not typed.
+			if !secretStdin {
+				again, err := a.readSecret(false, "Type it again")
+				if err != nil {
+					return err
+				}
+				if again != password {
+					return usagef("the two passwords are not the same")
+				}
+			}
+
+			_, saved, err := a.Send(ctx, http.MethodPut, "/mail/mailboxes/"+id+"/password",
+				map[string]any{"password": password})
+			if err != nil {
+				return err
+			}
+			credential := saved.Str("credential_id")
+
+			state, raw := "pending", []byte(nil)
+			if !noWait {
+				spin := a.IO.StartSpinner("Setting the password at the mail supplier")
+				state, raw, err = followPassword(ctx, a, id, credential)
+				spin.Stop()
+				if err != nil {
+					return err
+				}
+			}
+			if a.JSON {
+				if raw == nil {
+					raw, _ = json.Marshal(map[string]any{"credential_id": credential, "state": state})
+				}
+				return a.PrintJSON(raw)
+			}
+			switch state {
+			case "applied":
+				a.IO.Successf("Password changed. The new one works now")
+			case "failed":
+				return fmt.Errorf("the mail supplier did not take the new password; adaa retries on its own, and the old one works until then")
+			case "superseded":
+				a.IO.Warnf("Somebody chose a newer password while this one was being set; the newest is the one that counts")
+			case "pending":
+				if noWait {
+					a.IO.Successf("Password saved. It is being set at the mail supplier; the old one works until then")
+				} else {
+					a.IO.Warnf("Password saved, but it is taking longer than usual to set at the mail supplier. The old one works until then")
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&secretStdin, "secret-stdin", false, "Read the new password from stdin")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the password is saved, without following it to the supplier")
+	return cmd
+}
+
+// followPassword asks the API where a chosen password has got to, letting it
+// hold each request while the answer is still pending, until it is not or
+// followPasswordFor has passed.
+func followPassword(ctx context.Context, a *App, mailbox, credential string) (string, []byte, error) {
+	deadline := time.Now().Add(followPasswordFor)
+	for {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return "pending", nil, nil
+		}
+		wait := min(int(left.Seconds()+0.999), 10)
+		got, raw, err := a.Get(ctx, "/mail/mailboxes/"+mailbox+"/password", url.Values{
+			"credential_id": {credential},
+			"wait":          {strconv.Itoa(wait)},
+		})
+		if err != nil {
+			return "", nil, err
+		}
+		if state := got.Str("state"); state != "pending" {
+			return state, raw, nil
+		}
+	}
 }
 
 // editSet applies additions and removals to a list, keeping its order.
