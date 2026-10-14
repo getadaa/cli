@@ -239,7 +239,8 @@ Products each have their own group: `adaa mail`, `adaa domains` (with `dns`,
 `adaa mail mailboxes password kari@firma.no` chooses a new mailbox password
 (rule 4: only when the user asked). Run interactively it prompts twice; from an
 agent, pipe it in with `--secret-stdin`. It then follows the password until the
-mail supplier has it, for up to 20 seconds: exit 0 with "changed" when it has,
+mail supplier has it, for up to 20 seconds: exit 0 with "changed" when it has
+(tell the user a login can take a couple of minutes more to use it),
 exit 1 when the supplier refused it (adaa retries, and the old password works
 until then), and a warning, still exit 0, when it is only slow. `--no-wait`
 returns once it is saved.

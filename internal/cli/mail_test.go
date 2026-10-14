@@ -76,7 +76,7 @@ func TestMailboxPasswordFollowsUntilApplied(t *testing.T) {
 	if len(gets) != 2 || !strings.Contains(gets[0].Query, "credential_id=crd_01JATXV8W9X0Y1Z2A3B4C5D6E7") || !strings.Contains(gets[0].Query, "wait=") {
 		t.Fatalf("gets: %+v", gets)
 	}
-	if !strings.Contains(r.Stderr, "Password changed") {
+	if !strings.Contains(r.Stderr, "Password changed at the mail supplier") {
 		t.Errorf("stderr: %s", r.Stderr)
 	}
 	if strings.Contains(r.Stdout+r.Stderr, "et-ganske-langt-passord") {

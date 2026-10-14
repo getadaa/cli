@@ -442,8 +442,9 @@ func newMailboxesPasswordCmd(a *App) *cobra.Command {
 administrator. At least twelve characters; nothing else is required of it.
 
 The password is saved in adaa's vault and then set at the mail supplier. The
-command follows it until the supplier has it, for up to 20 seconds; the old
-password works until then. With --no-wait it returns once it is saved.`,
+command follows it until the supplier has it, for up to 20 seconds, and the old
+password works until then. The supplier can take a couple of minutes more
+before logins use the new one. With --no-wait it returns once it is saved.`,
 		Example: `  adaa mail mailboxes password kari@firma.no
   op read op://Private/kari-mail/password | adaa mail mailboxes password kari@firma.no --secret-stdin`,
 		Args:              cobra.MaximumNArgs(1),
@@ -494,7 +495,7 @@ password works until then. With --no-wait it returns once it is saved.`,
 			}
 			switch state {
 			case "applied":
-				a.IO.Successf("Password changed. The new one works now")
+				a.IO.Successf("Password changed at the mail supplier. It can take a couple of minutes before it works everywhere")
 			case "failed":
 				return fmt.Errorf("the mail supplier did not take the new password; adaa retries on its own, and the old one works until then")
 			case "superseded":
