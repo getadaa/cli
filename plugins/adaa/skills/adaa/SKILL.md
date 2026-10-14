@@ -1,6 +1,6 @@
 ---
 name: adaa
-description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), who may sign in and as what (members), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
+description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), who may sign in and as what (members), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), supplier connections, servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
 allowed-tools: Bash(adaa *), Bash(adaa)
 ---
 
@@ -11,7 +11,73 @@ touches is real: a person added here gets a mailbox and a paid seat, an
 offboarding revokes access, a restore overwrites live data. Treat every change
 as something the user will be billed for or will have to live with.
 
-## Start of every session
+## Setting up
+
+Do these in order the first time, and again whenever a step below fails.
+
+### 1. Is the CLI installed?
+
+```sh
+adaa --version
+```
+
+If the command is missing, install it. Installing software is the user's call:
+say what you are about to run and get their go-ahead first. Pick the first that
+fits:
+
+```sh
+brew install getadaa/tap/adaa                                            # macOS or Linux with Homebrew
+scoop bucket add getadaa https://github.com/getadaa/scoop-bucket         # Windows with Scoop,
+scoop install adaa                                                       # then this
+curl -fsSL https://raw.githubusercontent.com/getadaa/cli/main/install.sh | sh              # anything else, macOS or Linux
+irm https://raw.githubusercontent.com/getadaa/cli/main/install.ps1 | iex                  # anything else, Windows PowerShell
+```
+
+The scripts download the latest release, refuse it unless it matches the
+release's checksums, and install without sudo: to `~/.local/bin` (set
+`ADAA_INSTALL_DIR` to change it) or `%LOCALAPPDATA%\Programs\adaa`. If that
+directory is not on `PATH` yet, call adaa by its full path for the rest of the
+session and tell the user how to add it.
+
+### 2. Is somebody signed in?
+
+```sh
+adaa whoami
+```
+
+Exit code `3` means nobody is. Sign in with:
+
+```sh
+adaa login --no-browser
+```
+
+It prints a link and a short code, then waits — up to ten minutes — for a
+person to open the link, sign in to adaa in their browser if they are not
+already, type the code and approve. Give the user the link and the code
+exactly as printed, and tell them it is the sign-in you just started; it works
+from any device, a phone included. When they approve, `adaa login` finishes by
+itself and exits `0`. Run it with a long enough timeout (or in the background)
+that it can wait for them.
+
+Approving happens only on that page, and only a person can do it: the approval
+is them vouching that this terminal may act as them, so there is deliberately
+no command for it. Never try to approve a sign-in yourself, through
+`adaa api` or anything else, and never ask the user to approve a code they did
+not see you start.
+
+The session is for the company the user is acting on in the browser when they
+approve. If they work for several, say so before they approve, and use
+`adaa whoami` and `adaa switch` afterwards to land in the right one.
+
+If the user would rather not use a browser, `adaa login --email <address>`
+emails them a link; they paste it back and you run
+`adaa login --code '<link>'`. For unattended use they can instead create a
+token with `adaa tokens create` and set `ADAA_TOKEN`.
+
+A session lasts two weeks. When one expires, commands fail with exit code `3`:
+sign in again the same way.
+
+### 3. Check everything
 
 ```sh
 adaa doctor --fix
@@ -23,8 +89,9 @@ the config is intact, that the API is reachable (and the clock is right), that
 the session works, and that **this skill** is installed and identical to the
 published copy for every agent on the computer. It updates what it can: the
 CLI (through Homebrew, Scoop or a verified download), the skill, and a session
-kept outside the keychain. What it cannot fix it prints as a hint. Relay those
-to the user, especially "Not logged in" — signing in needs a person.
+kept outside the keychain. What it cannot fix it prints as a hint; relay those
+to the user. It never signs in without a person at the terminal — do step 2
+for that.
 
 `adaa doctor --json` gives the same checks as `{"ok": bool, "checks": [...]}`.
 
@@ -33,15 +100,21 @@ explains how to work; the help explains what exists in the version installed.
 
 ## Staying up to date
 
-- `adaa update` updates adaa the way it was installed. `adaa update --check`
-  only reports.
-- `adaa doctor --fix` does the same and also brings this skill up to date.
-- The skill is published in the `getadaa/plugins` marketplace. Claude Code
-  users can install it with `/plugin marketplace add getadaa/plugins` and
-  `/plugin install adaa@adaa`; anyone can use `adaa skill install`. Both are
-  the same file. `adaa skill status` lists every copy and whether it is current.
-- If a command in this file does not exist, the CLI is older than the skill:
-  run `adaa update`.
+Run `adaa doctor --fix` at the start of every session; it is the one command
+that keeps both halves current.
+
+- `adaa update` updates adaa the way it was installed: `brew upgrade`,
+  `scoop update`, or, for the install script, a verified download that
+  replaces the binary in place. `adaa update --check` only reports.
+- The skill is published in the `getadaa/plugins` marketplace and updates with
+  it. Claude Code users install it with `/plugin marketplace add getadaa/plugins`
+  and `/plugin install adaa@adaa`; anyone can use `adaa skill install`. Both
+  are the same file. `adaa skill status` lists every copy and whether it is
+  current, and `adaa doctor --fix` brings them up to date.
+- The CLI and this skill are released together. If a command in this file
+  does not exist, the CLI is older than the skill: run `adaa update`. If the
+  CLI has commands this file does not mention, the skill is older: run
+  `adaa doctor --fix`.
 
 ## You have no terminal
 
@@ -60,9 +133,8 @@ names the flag it needed. So:
   `--yes`. Never pass `--yes` to a change the user has not agreed to.
 - **Arguments must be explicit.** Given no record, commands open a picker;
   without a terminal that fails, so always pass the record.
-- **Sign-in is two steps.** `adaa login --email <address>` sends a link; the
-  user pastes it back and you run `adaa login --code '<link>'`. Or the user
-  sets `ADAA_TOKEN` (from `adaa tokens create`).
+- **Signing in waits for a person.** `adaa login` prints a link and a code and
+  blocks until somebody approves it in a browser; see "Setting up".
 - **One credential, one organization.** Somebody working for several customers
   — a consultant, a bookkeeper — signs in once and moves between them with
   `adaa switch`. `adaa whoami` lists the others under "Also yours". Check which
@@ -89,8 +161,8 @@ Exit codes: `0` ok · `1` error · `2` usage, or input needed without a terminal
 Every id says what it is: `per_` person, `dev_` device, `fnd_` finding,
 `tsk_` task, `req_` request, `dom_` domain, `mbx_` mailbox, `srv_` server,
 `bkp_` backup, `crd_` credential, `lic_` license, `sub_` subscription,
-`wsp_` workspace, `mem_` membership, `idn_` identity. `adaa show <id>` displays
-any of them.
+`wsp_` workspace, `pcn_` supplier connection, `mem_` membership, `idn_` identity,
+`att_` attachment. `adaa show <id>` displays any of them.
 
 Commands also accept what a person would say: an email or name for people
 (`me` for the current user), a hostname or serial number for devices, a
@@ -153,15 +225,53 @@ adaa devices list --unassigned
 adaa devices register --assign me             # records the computer adaa runs on
 adaa devices discover --json                  # hosts on the local network, known or new
 adaa licenses list --spare-seats
+adaa licenses edit lic_… --price 949.00
+adaa org services                             # what the company as a whole should have
+adaa org agreement                            # term, notice period and invoicing
 adaa cost
 adaa activity --since 24h
 ```
 
 Products each have their own group: `adaa mail`, `adaa domains` (with `dns`,
 `spf`, `transfer`), `adaa workspaces`, `adaa servers`, `adaa backups`.
-`adaa products` lists them. For anything without a command, `adaa api <path>`
+`adaa products` lists them.
+
+`adaa mail mailboxes password kari@firma.no` chooses a new mailbox password
+(rule 4: only when the user asked). Run interactively it prompts twice; from an
+agent, pipe it in with `--secret-stdin`. It then follows the password until the
+mail supplier has it, for up to 20 seconds: exit 0 with "changed" when it has
+(tell the user a login can take a couple of minutes more to use it),
+exit 1 when the supplier refused it (adaa retries, and the old password works
+until then), and a warning, still exit 0, when it is only slow. `--no-wait`
+returns once it is saved.
+
+For anything without a command, `adaa api <path>`
 calls the API directly (`{org}` in the path is filled in), e.g.
 `adaa api '/organizations/{org}/people' --paginate`.
+
+## Supplier connections
+
+Accounts the company holds at a supplier are **connections**: a Microsoft 365 or
+Google Workspace tenant, or a DNS host such as Bunny. `adaa connections providers`
+lists who can be connected and whether it takes a key or consent.
+
+```sh
+adaa connections providers
+adaa connections list
+adaa connections add bunny --name "Bunny DNS" --secret-stdin   # key read from stdin
+adaa workspaces connect --vendor microsoft_365 --domain firma.no --no-wait
+adaa connections view pcn_… --callback-url '<address the admin landed on>'
+adaa domains edit firma.no --dns-connection "Bunny DNS"         # publish the zone there
+```
+
+Consent is given by an administrator at the supplier, never by you. Without a
+terminal, `--no-wait` prints the consent link; give it to the user, and finish
+with `adaa connections view <connection> --callback-url` if the redirect did not
+complete it. A workspace whose status is `unauthorized` has lost consent:
+`adaa workspaces reauthorize <workspace>` issues a new link. A key connection
+that stops working needs `adaa credentials rotate` instead.
+`adaa connections remove` is final and deletes the key; it is refused while a
+domain publishes through it.
 
 ## Checks you can run from this computer
 
@@ -179,7 +289,8 @@ calls the API directly (`{org}` in the path is filled in), e.g.
 ## Rules
 
 1. Run `adaa doctor --fix` at the start and whenever something fails
-   unexpectedly. Report what it could not fix.
+   unexpectedly. Report what it could not fix. Ask before installing the CLI,
+   and never approve a sign-in yourself.
 2. Use `--dry-run` before any change that costs money or removes something,
    and show the user the preview. Pass `--yes` only after they agree.
 3. Never grant or change a role (`adaa members grant`, `adaa members role`)
@@ -192,8 +303,9 @@ calls the API directly (`{org}` in the path is filled in), e.g.
    or reset passwords unless the user asked for exactly that. Reveals are
    logged against the user, and the API may refuse agents outright
    (`agents-may-not-reveal`): tell the user to do it themselves.
-5. Never put secrets in command lines. `adaa credentials add` and
-   `adaa credentials rotate` read them with `--secret-stdin`.
+5. Never put secrets in command lines. `adaa credentials add`,
+   `adaa credentials rotate`, `adaa connections add` and
+   `adaa mail mailboxes password` read them with `--secret-stdin`.
 6. Prefer `--json` when you need to read results, and ids over names once
    you have them.
 7. When the API refuses something (exit 6), read `how_to_resolve` and relay

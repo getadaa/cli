@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -28,20 +29,25 @@ func init() {
 
 func newLoginCmd(a *App) *cobra.Command {
 	var email, code, apiURL string
-	var withToken bool
+	var withToken, noBrowser bool
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Sign in with a link sent to your email",
+		Short: "Sign in by approving this terminal in your browser",
 		Long: `Sign in to adaa.
 
-adaa has no passwords. You give your work email, adaa sends a sign-in link,
-and you paste the link (or the code in it) back here. The session is kept in
-your system keychain.
+adaa has no passwords. 'adaa login' shows a short code and a link; open the link
+in a browser where you are signed in to adaa (or sign in there), type the code,
+and approve. Only approve a code you started yourself: adaa never asks you to
+approve one. This terminal picks the session up by itself, so the browser can be
+on another device, such as your phone. The session is kept in your system
+keychain.
 
-Without a terminal, sign-in is two steps: --email sends the link, then --code
-finishes. For automation, create a token with 'adaa tokens create' and either
-set ADAA_TOKEN or pipe it to 'adaa login --with-token'.`,
+--email signs in with a link sent to your email instead: paste the link (or the
+code in it) back here, or finish later with --code. For automation, create a
+token with 'adaa tokens create' and either set ADAA_TOKEN or pipe it to
+'adaa login --with-token'.`,
 		Example: `  adaa login
+  adaa login --no-browser
   adaa login --email kari@firma.no
   adaa login --code 'https://adaa.no/login?code=…'
   echo "$ADAA_TOKEN" | adaa login --with-token`,
@@ -55,64 +61,172 @@ set ADAA_TOKEN or pipe it to 'adaa login --with-token'.`,
 					return err
 				}
 			}
-			if withToken {
+			switch {
+			case withToken:
 				token, err := readToken(a.IO.In)
 				if err != nil {
 					return err
 				}
 				return a.finishLogin(ctx, token, "")
+			case email == "" && code == "":
+				err := a.deviceLogin(ctx, noBrowser)
+				if !errors.Is(err, errNoDeviceFlow) {
+					return err
+				}
+				// An API from before device sign-in: the emailed link still works.
+				a.IO.Infof("%s", a.dim("This adaa server does not offer browser approval; sending a sign-in link instead."))
 			}
+			return a.emailLogin(ctx, email, code)
+		},
+	}
+	cmd.Flags().StringVar(&email, "email", "", "Sign in with a link sent to this email instead")
+	cmd.Flags().StringVar(&code, "code", "", "The sign-in link or code from the email")
+	cmd.Flags().BoolVar(&withToken, "with-token", false, "Read an API token from stdin instead")
+	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the approval link instead of opening it")
+	cmd.Flags().StringVar(&apiURL, "api-url", "", "Use a different API server, and remember it")
+	cmd.MarkFlagsMutuallyExclusive("with-token", "email")
+	cmd.MarkFlagsMutuallyExclusive("with-token", "code")
+	return cmd
+}
 
-			if code == "" {
-				if err := a.need(&email, "Your work email", "--email", validEmail); err != nil {
-					return err
-				}
-				_, err := ui.Spin(a.IO, "Sending a sign-in link…", func() (*api.Response, error) {
-					return a.Anonymous().Do(ctx, api.Request{Method: http.MethodPost, Path: "/auth/magic-link",
-						Body: map[string]string{"email": email}})
-				})
-				if err != nil {
-					return err
-				}
-				a.IO.Successf("If %s has an adaa account, a sign-in link is on its way.", email)
-				if !a.IO.Interactive() {
-					a.IO.Hint("adaa login --code <link or code from the email>")
-					return nil
-				}
-				if err := a.IO.Secret("Paste the link or code from the email", "--code", &code); err != nil {
-					return err
-				}
-			}
+var errNoDeviceFlow = errors.New("no device sign-in on this server")
 
-			c := codeFromInput(code)
-			if len(c) < 16 {
-				return usagef("that does not look like a sign-in code; paste the whole link from the email")
+// devicePollFloor stops a server-sent interval from turning polling into a
+// busy loop. Tests shorten it.
+var devicePollFloor = time.Second
+
+// deviceLogin is sign-in by approval: this terminal asks for a code, a person
+// approves it in a browser where they are already signed in, and the terminal
+// collects the session. Nothing secret is typed or pasted, which is what makes
+// it work for an agent running adaa on somebody's behalf.
+func (a *App) deviceLogin(ctx context.Context, noBrowser bool) error {
+	host, _ := os.Hostname()
+	resp, err := a.Anonymous().Do(ctx, api.Request{Method: http.MethodPost, Path: "/auth/device",
+		Body: map[string]string{"client_name": truncate(join(" on ", "adaa CLI", host), 100)}})
+	if err != nil {
+		var p *api.Problem
+		if errors.As(err, &p) && (p.Status == http.StatusNotFound || p.Status == http.StatusMethodNotAllowed) {
+			return errNoDeviceFlow
+		}
+		return err
+	}
+	d, err := obj.Parse(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	e := a.IO.E()
+	link := orNone(d.Str("verification_uri_complete"), d.Str("verification_uri"))
+	fmt.Fprintln(a.IO.Err, "Open this link and approve the sign-in:")
+	fmt.Fprintln(a.IO.Err, "  "+e.Bold(link))
+	fmt.Fprintln(a.IO.Err, "Enter this code there when asked: "+e.Bold(d.Str("user_code")))
+	if a.IO.Interactive() && !noBrowser {
+		if err := openBrowser(link); err == nil {
+			a.IO.Infof("%s", e.Dim("Opened it in your browser."))
+		}
+	}
+
+	interval := max(time.Duration(orZero(d.Int("interval_seconds")))*time.Second, devicePollFloor)
+	deadline := time.Now().Add(10 * time.Minute)
+	if t, err := time.Parse(time.RFC3339, d.Str("expires_at")); err == nil {
+		deadline = t
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	sp := a.IO.StartSpinner("Waiting for you to approve it…")
+	defer sp.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			sp.Stop()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return errors.New("the code expired before anybody approved it; run `adaa login` again")
 			}
-			resp, err := ui.Spin(a.IO, "Signing in…", func() (*api.Response, error) {
-				return a.Anonymous().Do(ctx, api.Request{Method: http.MethodPost, Path: "/auth/session",
-					Body: map[string]string{"code": c}})
-			})
-			if err != nil {
-				var p *api.Problem
-				if errors.As(err, &p) && p.Code() == "sign-in-link-expired" {
-					a.IO.Hint("adaa login   (each link works once; ask for a new one)")
-				}
-				return err
-			}
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+		resp, err := a.Anonymous().Do(ctx, api.Request{Method: http.MethodPost, Path: "/auth/device/token",
+			Body: map[string]string{"device_code": d.Str("device_code")}})
+		var p *api.Problem
+		switch {
+		case err == nil:
+			sp.Stop()
 			session, err := obj.Parse(resp.Body)
 			if err != nil {
 				return err
 			}
 			return a.finishLogin(ctx, session.Str("token"), session.Str("expires_at"))
-		},
+		case !errors.As(err, &p):
+			return err
+		}
+		switch p.Code() {
+		case "authorization-pending":
+		case "slow-down", "rate-limited":
+			interval += 5 * time.Second
+		case "device-authorization-denied":
+			sp.Stop()
+			return errors.New("the sign-in was refused in the browser")
+		case "device-code-expired":
+			sp.Stop()
+			return errors.New("the code expired or was already used; run `adaa login` again")
+		default:
+			return err
+		}
 	}
-	cmd.Flags().StringVar(&email, "email", "", "Work email to send the sign-in link to")
-	cmd.Flags().StringVar(&code, "code", "", "The sign-in link or code from the email")
-	cmd.Flags().BoolVar(&withToken, "with-token", false, "Read an API token from stdin instead")
-	cmd.Flags().StringVar(&apiURL, "api-url", "", "Use a different API server, and remember it")
-	cmd.MarkFlagsMutuallyExclusive("with-token", "email")
-	cmd.MarkFlagsMutuallyExclusive("with-token", "code")
-	return cmd
+}
+
+func orZero(n int64, _ bool) int64 { return n }
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+// emailLogin is sign-in by magic link: send one, then redeem the code in it.
+func (a *App) emailLogin(ctx context.Context, email, code string) error {
+	if code == "" {
+		if err := a.need(&email, "Your work email", "--email", validEmail); err != nil {
+			return err
+		}
+		_, err := ui.Spin(a.IO, "Sending a sign-in link…", func() (*api.Response, error) {
+			return a.Anonymous().Do(ctx, api.Request{Method: http.MethodPost, Path: "/auth/magic-link",
+				Body: map[string]string{"email": email}})
+		})
+		if err != nil {
+			return err
+		}
+		a.IO.Successf("If %s has an adaa account, a sign-in link is on its way.", email)
+		if !a.IO.Interactive() {
+			a.IO.Hint("adaa login --code <link or code from the email>")
+			return nil
+		}
+		if err := a.IO.Secret("Paste the link or code from the email", "--code", &code); err != nil {
+			return err
+		}
+	}
+
+	c := codeFromInput(code)
+	if len(c) < 16 {
+		return usagef("that does not look like a sign-in code; paste the whole link from the email")
+	}
+	resp, err := ui.Spin(a.IO, "Signing in…", func() (*api.Response, error) {
+		return a.Anonymous().Do(ctx, api.Request{Method: http.MethodPost, Path: "/auth/session",
+			Body: map[string]string{"code": c}})
+	})
+	if err != nil {
+		var p *api.Problem
+		if errors.As(err, &p) && p.Code() == "sign-in-link-expired" {
+			a.IO.Hint("adaa login   (each link works once; ask for a new one)")
+		}
+		return err
+	}
+	session, err := obj.Parse(resp.Body)
+	if err != nil {
+		return err
+	}
+	return a.finishLogin(ctx, session.Str("token"), session.Str("expires_at"))
 }
 
 func validEmail(s string) error {

@@ -171,6 +171,7 @@ func (a *App) renderDNSRecord(r obj.Obj) {
 	}
 	v.Field("Conflicts", r.Str("conflict_policy"))
 	v.Field("Needed by", strings.Join(r.Strings("required_by"), ", "))
+	v.Field("Required by provider", r.Str("managed_by"))
 	v.Field("Last checked", a.IO.When(r.Str("last_checked_at")))
 	if in := r.Str("instruction"); in != "" {
 		v.Section("How to publish it")

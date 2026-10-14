@@ -42,13 +42,13 @@ func TestPeopleViewByEmail(t *testing.T) {
 	f.on("GET /people/"+testPerson2+"/entitlements", 200, page(
 		map[string]any{"id": "ent_01JATX3M4K7Q2YV8N0RCBEZ5HS", "service_code": "office-suite", "service_name": "Microsoft 365", "quantity": 1, "fulfilled": false}))
 	f.on("GET /people/"+testPerson2+"/assignments", 200, map[string]any{
-		"person_id":     testPerson2,
-		"devices":       []any{map[string]any{"device_id": "dev_x", "name": "MacBook Air", "kind": "computer", "status": "in_use"}},
-		"cost":          map[string]any{"currency": "NOK", "monthly_minor": 49900, "wasted_monthly_minor": 0},
-		"license_seats": []any{}, "subscription_seats": []any{}, "workspace_accounts": []any{}, "other_resources": []any{},
+		"person_id":          testPerson2,
+		"devices":            []any{map[string]any{"device_id": "dev_x", "name": "MacBook Air", "kind": "computer", "status": "in_use"}},
+		"license_seats":      []any{map[string]any{"license_id": "lic_x", "plan_name": "Business Standard", "vendor": "microsoft_365", "monthly_cost_minor": 49900, "inactive_days": nil}},
+		"subscription_seats": []any{}, "workspace_accounts": []any{}, "monthly_total_minor": 49900, "unpriced_count": 1,
 	})
 	r := f.run("people", "view", "ola@firma.no").mustSucceed(t)
-	for _, want := range []string{"Ola Nordmann", "Microsoft 365", "not in place yet", "MacBook Air", "499,00 kr per month"} {
+	for _, want := range []string{"Ola Nordmann", "Microsoft 365", "not in place yet", "MacBook Air", "Business Standard", "499,00 kr per month", "1 not priced yet"} {
 		if !strings.Contains(r.Stdout, want) {
 			t.Errorf("missing %q:\n%s", want, r.Stdout)
 		}
