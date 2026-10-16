@@ -145,6 +145,17 @@ func newOrgAgreementCmd(a *App) *cobra.Command {
 				d.Field("Interval", o.Str("invoice_interval"))
 				d.Field("Charged", "in "+o.Str("invoice_timing"))
 				d.Field("Payment terms", o.Str("payment_terms_days")+" days")
+				if prices := o.List("prices"); len(prices) > 0 {
+					d.Section("Agreed prices")
+					for _, p := range prices {
+						p["currency"] = "NOK"
+						list := money(p, "list_price_minor")
+						if list == "" {
+							list = "not quoted"
+						}
+						d.Field(p.Str("service_code"), join(" ", money(p, "unit_price_minor"), a.dim("(list "+list+")")))
+					}
+				}
 				d.Section("Signature")
 				d.Field("Signed by", o.Str("signed_by_name"))
 				d.Field("Signed", join(" ", a.IO.When(o.Str("signed_at")), a.dim(o.Str("signature_method"))))

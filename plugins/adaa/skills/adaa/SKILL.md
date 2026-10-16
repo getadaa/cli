@@ -131,6 +131,12 @@ names the flag it needed. So:
   what would happen, what needs approval and what it does to the monthly bill.
   Show that to the user and get their go-ahead before running it again with
   `--yes`. Never pass `--yes` to a change the user has not agreed to.
+- **Binding purchases need `--accept-commitment`.** Some lines, such as an
+  Exchange mailbox, are paid for a whole period with no cancelling and no
+  refund. Their `--dry-run` shows a `Binding:` line with the price, the end
+  date and an id (`cmt_…`). `--yes` does not accept it; the real request is
+  refused until it is sent with `--accept-commitment cmt_…`. The id changes when
+  the price or the date does, so dry-run again if it is refused.
 - **Arguments must be explicit.** Given no record, commands open a picker;
   without a terminal that fails, so always pass the record.
 - **Signing in waits for a person.** `adaa login` prints a link and a code and
@@ -227,7 +233,7 @@ adaa devices discover --json                  # hosts on the local network, know
 adaa licenses list --spare-seats
 adaa licenses edit lic_… --price 949.00
 adaa org services                             # what the company as a whole should have
-adaa org agreement                            # term, notice period and invoicing
+adaa org agreement                            # term, notice, invoicing and agreed prices
 adaa cost
 adaa activity --since 24h
 ```
@@ -293,6 +299,9 @@ domain publishes through it.
    and never approve a sign-in yourself.
 2. Use `--dry-run` before any change that costs money or removes something,
    and show the user the preview. Pass `--yes` only after they agree.
+   Pass `--accept-commitment` only after the user has read the binding terms
+   and said yes to them in so many words; it commits them to a bill they
+   cannot get back.
 3. Never grant or change a role (`adaa members grant`, `adaa members role`)
    unless the user asked for exactly that. Access is not a detail to tidy up:
    an administrator can turn off everything else. Revoking is immediate —
