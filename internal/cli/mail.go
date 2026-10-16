@@ -240,7 +240,7 @@ func newMailboxesViewCmd(a *App) *cobra.Command {
 }
 
 func newMailboxesAddCmd(a *App) *cobra.Command {
-	var address, kind, name, person string
+	var address, kind, name, person, accept string
 	var delegates []string
 	var quotaGB int
 	var dryRun bool
@@ -308,7 +308,7 @@ post@firma.no, belongs to nobody and is opened by the people delegated to it.`,
 				return err
 			}
 			resp, m, err := a.Apply(ctx, Change{Method: http.MethodPost, Path: path, Body: body,
-				Question: "Create " + address + "?", DryRun: dryRun})
+				Question: "Create " + address + "?", DryRun: dryRun, AcceptCommitment: accept})
 			if err != nil || dryRun {
 				return err
 			}
@@ -327,6 +327,7 @@ post@firma.no, belongs to nobody and is opened by the people delegated to it.`,
 	f.StringArrayVar(&delegates, "delegate", nil, "Person who can open a shared mailbox (repeatable)")
 	f.IntVar(&quotaGB, "quota-gb", 0, "Size limit, in GiB")
 	addDryRunFlag(cmd, &dryRun)
+	addAcceptCommitmentFlag(cmd, &accept)
 	enumFlag(cmd, "kind", "personal", "shared")
 	_ = cmd.RegisterFlagCompletionFunc("person", a.complete(kindPerson))
 	_ = cmd.RegisterFlagCompletionFunc("delegate", a.complete(kindPerson))

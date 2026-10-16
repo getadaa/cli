@@ -246,6 +246,14 @@ type Change struct {
 	Question string
 	// DryRun is the --dry-run flag: show the preview and stop.
 	DryRun bool
+	// AcceptCommitment is the --accept-commitment flag: the id of the binding
+	// terms a preview showed, accepted. --yes never stands in for it.
+	AcceptCommitment string
+}
+
+func addAcceptCommitmentFlag(cmd *cobra.Command, v *string) {
+	cmd.Flags().StringVar(v, "accept-commitment", "",
+		"Accept the binding terms a --dry-run showed, by their id (cmt_…). Nothing is refunded before they end")
 }
 
 func addDryRunFlag(cmd *cobra.Command, v *bool) {
@@ -287,11 +295,36 @@ func (a *App) Apply(ctx context.Context, c Change) (*api.Response, obj.Obj, erro
 		if err := a.Confirm(c.Question); err != nil {
 			return nil, nil, err
 		}
+		if err := a.acceptCommitment(p.Obj("commitment"), &c); err != nil {
+			return nil, nil, err
+		}
 	} else if !a.Yes {
 		return nil, nil, &ui.NoInputError{What: "confirmation", Flag: "--yes (or --dry-run to preview)"}
 	}
 	delete(c.Body, "dry_run")
+	if c.AcceptCommitment != "" {
+		c.Body["accept_commitment"] = c.AcceptCommitment
+	}
 	return a.Send(ctx, c.Method, c.Path, c.Body)
+}
+
+// acceptCommitment asks, separately from the confirmation, whether the person
+// accepts terms they cannot cancel. It is its own question so that agreeing to
+// "create this?" is never read as agreeing to a year's bill.
+func (a *App) acceptCommitment(commitment obj.Obj, c *Change) error {
+	if commitment == nil || c.AcceptCommitment != "" {
+		return nil
+	}
+	ok, err := a.IO.Confirm("Accept these binding terms? Nothing is refunded before "+
+		commitment.Str("binding_until")+".", "--accept-commitment "+commitment.Str("id"), false)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ui.ErrCancelled
+	}
+	c.AcceptCommitment = commitment.Str("id")
+	return nil
 }
 
 // renderPreview draws a ChangePreview to stderr, where the confirm prompt is.
@@ -320,6 +353,7 @@ func (a *App) renderPreview(p obj.Obj) {
 		fmt.Fprintln(io.Err, line)
 	}
 	a.renderCost(p.Obj("cost_delta"))
+	a.renderCommitment(p.Obj("commitment"))
 	for _, b := range p.List("blocked") {
 		reason := b.Str("reason")
 		if reason == "" {
@@ -328,6 +362,28 @@ func (a *App) renderPreview(p obj.Obj) {
 		fmt.Fprintln(io.Err, "  "+e.Red("✗")+" "+b.Str("summary")+" "+e.Dim(reason))
 	}
 	fmt.Fprintln(io.Err)
+}
+
+// renderCommitment states binding terms plainly, because they are the one part
+// of a preview that cannot be undone by changing your mind later.
+func (a *App) renderCommitment(c obj.Obj) {
+	if c == nil {
+		return
+	}
+	e := a.IO.E()
+	fmt.Fprintln(a.IO.Err, "  "+e.Yellow("!")+" "+e.Bold(fmt.Sprintf("Binding: %s costs %s per %s until %s, with no cancelling or refund.",
+		c.Str("service_name"), money(c, "unit_price_minor"), periodWord(c.Str("billing_period")), c.Str("binding_until"))))
+	fmt.Fprintln(a.IO.Err, "    "+e.Dim("To accept: --accept-commitment "+c.Str("id")))
+}
+
+func periodWord(period string) string {
+	if period == "yearly" {
+		return "year"
+	}
+	if period == "monthly" {
+		return "month"
+	}
+	return period
 }
 
 func (a *App) renderCost(cd obj.Obj) {
