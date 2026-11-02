@@ -1,6 +1,7 @@
 ---
 name: adaa
 description: Run a company's IT through adaa with the `adaa` CLI — people (onboarding and offboarding), who may sign in and as what (members), devices, findings (problems), tasks, requests, subscriptions and cost, mail, domains and DNS, workspaces (Microsoft 365, Google Workspace), servers, backups and credentials. Use whenever the user mentions adaa, the `adaa` command, or asks to check, change or report something about their company's IT that adaa manages.
+argument-hint: "[what you want done, in your own words]"
 allowed-tools: Bash(adaa *), Bash(adaa)
 ---
 
@@ -10,6 +11,13 @@ adaa runs IT for small companies. `adaa` is its command line. Everything it
 touches is real: a person added here gets a mailbox and a paid seat, an
 offboarding revokes access, a restore overwrites live data. Treat every change
 as something the user will be billed for or will have to live with.
+
+## Invoked as /adaa
+
+In Claude Code the user can type `/adaa <request>` (`$adaa` in Codex). The
+text after it is the request. Run the session start below, check with
+`adaa whoami` which organization you are acting on, and `adaa switch` first if
+the request names another company. Then do what it asks, by the rules here.
 
 ## Start of every session
 
@@ -163,6 +171,27 @@ Products each have their own group: `adaa mail`, `adaa domains` (with `dns`,
 calls the API directly (`{org}` in the path is filled in), e.g.
 `adaa api '/organizations/{org}/people' --paginate`.
 
+## Secrets into a file, unseen
+
+When the user asks for passwords on this computer without you seeing them,
+write them to a file and never read it. When output is piped,
+`adaa credentials reveal` writes only the secret, so it can go straight into
+the file:
+
+```sh
+umask 077
+adaa credentials list --target-type mail --json --all     # ids and usernames only
+{ printf '%s\t' "kari@firma.no"; adaa credentials reveal crd_… --reason "<the user's reason>"; } >> ~/adaa-passwords.tsv
+```
+
+- Ask the user for the reason (it is logged against them) and where the file
+  should go, unless they said.
+- Never print, `cat`, `head`, grep or otherwise read the file, and never hold
+  a secret in a variable you echo. Report how many lines were written and the
+  path.
+- The file is plain text: tell the user to move the passwords somewhere safe
+  and delete it.
+
 ## Checks you can run from this computer
 
 - `adaa domains check <domain>` resolves every record adaa expects against
@@ -191,7 +220,9 @@ calls the API directly (`{org}` in the path is filled in), e.g.
    (`adaa credentials reveal`), print a domain auth code (`adaa domains auth-code`)
    or reset passwords unless the user asked for exactly that. Reveals are
    logged against the user, and the API may refuse agents outright
-   (`agents-may-not-reveal`): tell the user to do it themselves.
+   (`agents-may-not-reveal`): tell the user to do it themselves. A secret you
+   reveal goes into a file, never onto your screen (see "Secrets into a file,
+   unseen").
 5. Never put secrets in command lines. `adaa credentials add` and
    `adaa credentials rotate` read them with `--secret-stdin`.
 6. Prefer `--json` when you need to read results, and ids over names once
