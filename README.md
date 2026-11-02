@@ -17,6 +17,9 @@ $ adaa status
 
 ## Install
 
+With an AI agent, tell it: "install adaa, follow
+https://adaa.no/install".
+
 ```sh
 brew install getadaa/tap/adaa                                                      # macOS, Linux
 scoop bucket add getadaa https://github.com/getadaa/scoop-bucket && scoop install adaa  # Windows
